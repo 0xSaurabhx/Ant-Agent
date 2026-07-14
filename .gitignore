@@ -1,0 +1,5 @@
+.venv
+.ant_agent
+.env
+__pycache__
+spec.md
