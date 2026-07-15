@@ -566,7 +566,7 @@ Do not include any markdown formatting (like ```json or ```) in your output. Ret
                 self.save_session()
             
             # Run the heavy agent loop with the contextualized input
-            max_iterations = 15
+            max_iterations = self.config.get("max_iterations", 30)
             for i in range(max_iterations):
                 messages = []
                 messages.append({"role": "system", "content": self.get_system_prompt()})

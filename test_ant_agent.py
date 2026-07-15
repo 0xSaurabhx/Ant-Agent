@@ -604,5 +604,51 @@ and some trailing text."""
         self.assertEqual(len(clean_msgs), 1)
         self.assertTrue("<think>Executing tool calls.</think>" in clean_msgs[0]["content"])
 
+    def test_max_iterations_config(self):
+        from ant_agent.config import DEFAULT_CONFIG
+        self.assertEqual(DEFAULT_CONFIG.get("max_iterations"), 30)
+        
+        self.config["max_iterations"] = 3
+        agent = AntAgent(self.config)
+        agent.triage_request = lambda prompt: {
+            "route": "planner",
+            "tool": None,
+            "parameter": None,
+            "explanation": "test route"
+        }
+        agent.query_llm = lambda prompt, system_override, use_history: "final loop output"
+        
+        class MockFunction:
+            def __init__(self):
+                self.name = "token_counter"
+                self.arguments = '{"parameter": "test"}'
+        class MockToolCall:
+            def __init__(self):
+                self.id = "mock_call"
+                self.type = "function"
+                self.function = MockFunction()
+                
+        class MockMessage:
+            def __init__(self):
+                self.content = None
+                self.tool_calls = [MockToolCall()]
+        class MockChoice:
+            def __init__(self):
+                self.message = MockMessage()
+        class MockResponse:
+            def __init__(self):
+                self.choices = [MockChoice()]
+                
+        call_count = 0
+        def mock_create(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            return MockResponse()
+            
+        agent.client.chat.completions.create = mock_create
+        
+        agent.run_cycle("do work", verbose=False)
+        self.assertEqual(call_count, 3)
+
 if __name__ == "__main__":
     unittest.main()

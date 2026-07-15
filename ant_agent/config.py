@@ -97,6 +97,7 @@ DEFAULT_CONFIG = {
     "system_prompt": DEFAULT_NATIVE_SYSTEM_PROMPT,
     "tool_calling_method": "native", # Options: native, xml
     "show_thinking": True,
+    "max_iterations": 30,
     "active_tools": [
         "extended_think",
         "plan_and_todo",
