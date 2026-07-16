@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import sys
+import json
+from datetime import datetime
 import argparse
 from rich.console import Console
 from rich.markdown import Markdown
@@ -24,6 +26,7 @@ def print_help(console):
     table.add_row("/stats", "Show token utilization and estimated session cost")
     table.add_row("/wipe", "Delete all saved persistent conversations in this workspace")
     table.add_row("/clear", "Clear the current chat history")
+    table.add_row("/history", "List all saved chat sessions in this workspace")
     table.add_row("/exit", "Exit the chat session")
     table.add_row("/quit", "Exit the chat session")
     console.print(table)
@@ -47,20 +50,55 @@ def print_history(console, history):
         elif role == "tool":
             console.print(f"[bold green][DONE][/bold green] Executed {msg.get('name')}")
 
-def print_session_stats(console, agent):
+def print_stats(console, agent, show_global=True):
     prompt_tokens = agent.session_prompt_tokens
     completion_tokens = agent.session_completion_tokens
     total_tokens = prompt_tokens + completion_tokens
-    cost = (prompt_tokens * 0.07 / 1_000_000) + (completion_tokens * 0.34 / 1_000_000)
     
-    table = Table(title="Session Token Utilization & Cost", show_header=True, header_style="bold green")
+    table = Table(title="Current Session Token Utilization", show_header=True, header_style="bold green")
     table.add_column("Metric", style="cyan")
     table.add_column("Count / Value", style="white")
-    table.add_row("Prompt (Input) Tokens", f"{prompt_tokens:,}")
-    table.add_row("Completion (Output) Tokens", f"{completion_tokens:,}")
-    table.add_row("Total Tokens", f"{total_tokens:,}")
-    table.add_row("Estimated Cost", f"${cost:.6f}")
+    table.add_row("Active Model", agent.config.get("llm_model", "Unknown"))
+    table.add_row("Input (Prompt) Tokens", f"{prompt_tokens:,}")
+    table.add_row("Output (Completion) Tokens", f"{completion_tokens:,}")
+    table.add_row("Total Session Tokens", f"{total_tokens:,}")
     console.print(table)
+    
+    if show_global:
+        from ant_agent.config import STATS_PATH
+        if STATS_PATH.exists():
+            try:
+                with open(STATS_PATH, "r") as f:
+                    stats = json.load(f)
+            except Exception:
+                stats = {}
+                
+            models = stats.get("models", {})
+            if models:
+                global_table = Table(title="Global Lifetime Token Consumption", show_header=True, header_style="bold magenta")
+                global_table.add_column("Model Name", style="cyan")
+                global_table.add_column("Input (Prompt) Tokens", style="white")
+                global_table.add_column("Output (Completion) Tokens", style="white")
+                global_table.add_column("Total Tokens", style="white")
+                
+                for model_name, m_stats in sorted(models.items()):
+                    global_table.add_row(
+                        model_name,
+                        f"{m_stats.get('prompt_tokens', 0):,}",
+                        f"{m_stats.get('completion_tokens', 0):,}",
+                        f"{m_stats.get('total_tokens', 0):,}"
+                    )
+                
+                # Add total row
+                global_table.add_row(
+                    "[bold yellow]Total Lifetime[/bold yellow]",
+                    f"{stats.get('total_prompt_tokens', 0):,}",
+                    f"{stats.get('total_completion_tokens', 0):,}",
+                    f"{stats.get('total_total_tokens', 0):,}",
+                    style="bold"
+                )
+                console.print()
+                console.print(global_table)
 
 def cmd_chat(args):
     console = Console()
@@ -84,7 +122,7 @@ def cmd_chat(args):
         print_history(console, agent.history)
 
     completer = WordCompleter([
-        '/exit', '/quit', '/clear', '/help', '/config', '/tools', '/thinking', '/stats', '/wipe'
+        '/exit', '/quit', '/clear', '/help', '/config', '/tools', '/thinking', '/stats', '/wipe', '/history'
     ], ignore_case=True)
     
     prompt_style = PromptStyle.from_dict({
@@ -100,7 +138,7 @@ def cmd_chat(args):
                 continue
             
             if user_input in ("/exit", "/quit"):
-                print_session_stats(console, agent)
+                print_stats(console, agent)
                 console.print("[cyan]Goodbye![/cyan]")
                 break
                 
@@ -117,6 +155,10 @@ def cmd_chat(args):
 
             if user_input == "/help":
                 print_help(console)
+                continue
+
+            if user_input == "/history":
+                print_history_list(console)
                 continue
 
             if user_input == "/tools":
@@ -141,7 +183,7 @@ def cmd_chat(args):
                 continue
 
             if user_input == "/stats":
-                print_session_stats(console, agent)
+                print_stats(console, agent)
                 continue
 
             if user_input == "/config":
@@ -179,7 +221,7 @@ def cmd_chat(args):
             console.print()
 
         except KeyboardInterrupt:
-            print_session_stats(console, agent)
+            print_stats(console, agent)
             console.print("\n[cyan]Goodbye![/cyan]")
             break
         except Exception as e:
@@ -213,15 +255,8 @@ def cmd_config(args):
         else:
             console.print("[bold red]Failed to save configuration.[/bold red]")
 
-def cmd_resume(args):
-    console = Console()
-    config = load_config()
+def print_history_list(console):
     sessions_dir = Path.cwd() / ".ant_agent" / "sessions"
-    
-    if args.session_id:
-        cmd_chat(args)
-        return
-        
     if not sessions_dir.exists() or not list(sessions_dir.glob("*.json")):
         console.print("[yellow]No saved chat sessions found in this workspace.[/yellow]")
         return
@@ -250,6 +285,13 @@ def cmd_resume(args):
             pass
             
     console.print(table)
+
+def cmd_resume(args):
+    console = Console()
+    if args.session_id:
+        cmd_chat(args)
+        return
+    print_history_list(console)
     console.print("\nTo resume a session, run: [bold green]python ant_agent.py resume <session-uuid>[/bold green]\n")
 
 def cmd_memory(args):
@@ -274,6 +316,12 @@ def cmd_memory(args):
         for i, res in enumerate(results, 1):
             table.add_row(str(i), f"{res['score']:.4f}", res['text'], str(res['timestamp']))
         console.print(table)
+
+def cmd_stats(args):
+    console = Console()
+    config = load_config()
+    agent = AntAgent(config)
+    print_stats(console, agent, show_global=True)
 
 def main():
     parser = argparse.ArgumentParser(description="Ant Agent CLI AI Agent")
@@ -309,6 +357,9 @@ def main():
     query_parser.add_argument("text", nargs="+", help="Search query string")
     query_parser.add_argument("--limit", type=int, default=5, help="Number of records to show")
 
+    # Stats Subcommand
+    stats_parser = subparsers.add_parser("stats", help="Display global lifetime token consumption stats")
+
     args = parser.parse_args()
 
     if args.command == "chat":
@@ -319,6 +370,8 @@ def main():
         cmd_config(args)
     elif args.command == "memory":
         cmd_memory(args)
+    elif args.command == "stats":
+        cmd_stats(args)
 
 if __name__ == "__main__":
     main()

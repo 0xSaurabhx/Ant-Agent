@@ -21,6 +21,7 @@ class TestAntAgent(unittest.TestCase):
         self.orig_config_path = ant_agent.config.CONFIG_PATH
         self.orig_memory_path = ant_agent.config.MEMORY_PATH
         self.orig_todo_path = ant_agent.config.TODO_PATH
+        self.orig_stats_path = getattr(ant_agent.config, "STATS_PATH", None)
         
         # Monkeypatch Path.home
         pathlib.Path.home = lambda: Path(self.temp_dir.name)
@@ -30,6 +31,7 @@ class TestAntAgent(unittest.TestCase):
         ant_agent.config.CONFIG_PATH = Path(self.temp_dir.name) / ".ant_agent" / "config.json"
         ant_agent.config.MEMORY_PATH = Path(self.temp_dir.name) / ".ant_agent" / "memory.json"
         ant_agent.config.TODO_PATH = Path(self.temp_dir.name) / ".ant_agent" / "todo.json"
+        ant_agent.config.STATS_PATH = Path(self.temp_dir.name) / ".ant_agent" / "stats.json"
         
         # Change current working directory to temp dir
         os.chdir(self.temp_dir.name)
@@ -48,6 +50,8 @@ class TestAntAgent(unittest.TestCase):
         ant_agent.config.CONFIG_PATH = self.orig_config_path
         ant_agent.config.MEMORY_PATH = self.orig_memory_path
         ant_agent.config.TODO_PATH = self.orig_todo_path
+        if self.orig_stats_path is not None:
+            ant_agent.config.STATS_PATH = self.orig_stats_path
         
         # Restore CWD
         os.chdir(self.orig_cwd)
@@ -649,6 +653,100 @@ and some trailing text."""
         
         agent.run_cycle("do work", verbose=False)
         self.assertEqual(call_count, 3)
+
+    def test_usage_tracking(self):
+        # Initial stats should not exist or be empty
+        from ant_agent.config import STATS_PATH
+        self.assertFalse(STATS_PATH.exists())
+        
+        # Track some usage
+        self.agent.track_usage("gemma-4-26b-a4b-it", 100, 50)
+        
+        # Verify global file contents
+        self.assertTrue(STATS_PATH.exists())
+        with open(STATS_PATH, "r") as f:
+            stats = json.load(f)
+            
+        self.assertEqual(stats["total_prompt_tokens"], 100)
+        self.assertEqual(stats["total_completion_tokens"], 50)
+        self.assertEqual(stats["total_total_tokens"], 150)
+        
+        gemma_stats = stats["models"]["gemma-4-26b-a4b-it"]
+        self.assertEqual(gemma_stats["prompt_tokens"], 100)
+        self.assertEqual(gemma_stats["completion_tokens"], 50)
+        self.assertEqual(gemma_stats["total_tokens"], 150)
+        
+        # Track more usage with the same model
+        self.agent.track_usage("gemma-4-26b-a4b-it", 200, 100)
+        
+        with open(STATS_PATH, "r") as f:
+            stats = json.load(f)
+            
+        self.assertEqual(stats["total_prompt_tokens"], 300)
+        self.assertEqual(stats["total_completion_tokens"], 150)
+        self.assertEqual(stats["total_total_tokens"], 450)
+        
+        # Track usage with a different model
+        self.agent.track_usage("gpt-4o", 50, 10)
+        
+        with open(STATS_PATH, "r") as f:
+            stats = json.load(f)
+            
+        self.assertEqual(stats["total_prompt_tokens"], 350)
+        self.assertEqual(stats["total_completion_tokens"], 160)
+        self.assertEqual(stats["total_total_tokens"], 510)
+        
+        self.assertEqual(stats["models"]["gpt-4o"]["prompt_tokens"], 50)
+        self.assertEqual(stats["models"]["gpt-4o"]["completion_tokens"], 10)
+
+    def test_reconcile_resumed_session(self):
+        # 1. Create a mock session file representing a session created before
+        # global stats tracking was introduced. It will have prompt/completion
+        # tokens but NO session_tracked_prompt_tokens.
+        from ant_agent.config import STATS_PATH
+        session_id = "test_resume_reconcile_123"
+        session_file = Path(self.temp_dir.name) / ".ant_agent" / "sessions" / f"{session_id}.json"
+        session_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(session_file, "w") as f:
+            json.dump({
+                "uuid": session_id,
+                "history": [],
+                "session_prompt_tokens": 1200,
+                "session_completion_tokens": 300,
+                "timestamp": "2026-07-16T12:00:00"
+            }, f)
+            
+        # Verify stats.json does not exist yet
+        self.assertFalse(STATS_PATH.exists())
+        
+        # 2. Instantiate agent with this session ID. It should load the session
+        # and automatically reconcile the untracked tokens.
+        agent = AntAgent(self.config, session_id=session_id)
+        
+        # Verify stats.json was created and populated with reconciled tokens
+        self.assertTrue(STATS_PATH.exists())
+        with open(STATS_PATH, "r") as f:
+            stats = json.load(f)
+            
+        self.assertEqual(stats["total_prompt_tokens"], 1200)
+        self.assertEqual(stats["total_completion_tokens"], 300)
+        self.assertEqual(stats["total_total_tokens"], 1500)
+        
+        # Verify session file was updated with tracked totals
+        with open(session_file, "r") as f:
+            session_data = json.load(f)
+        self.assertEqual(session_data["session_tracked_prompt_tokens"], 1200)
+        self.assertEqual(session_data["session_tracked_completion_tokens"], 300)
+        
+        # 3. Instantiate another agent with the same session. No new untracked
+        # tokens exist, so stats.json should remain unchanged.
+        agent2 = AntAgent(self.config, session_id=session_id)
+        with open(STATS_PATH, "r") as f:
+            stats = json.load(f)
+            
+        self.assertEqual(stats["total_prompt_tokens"], 1200)
+        self.assertEqual(stats["total_completion_tokens"], 300)
 
 if __name__ == "__main__":
     unittest.main()
