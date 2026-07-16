@@ -14,6 +14,7 @@ OLD_TODO_PATH = Path.home() / ".oneb_todo.json"
 CONFIG_PATH = ANT_AGENT_DIR / "config.json"
 MEMORY_PATH = ANT_AGENT_DIR / "memory.json"
 TODO_PATH = ANT_AGENT_DIR / "todo.json"
+STATS_PATH = ANT_AGENT_DIR / "stats.json"
 
 # Perform migration if old files exist
 if OLD_CONFIG_PATH.exists() and not CONFIG_PATH.exists():

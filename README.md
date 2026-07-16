@@ -120,6 +120,7 @@ While in a chat session, you can use these shortcuts:
 * `/thinking` - Toggle the visibility of the agent's thought process scratchpad.
 * `/stats` - Print session token utilization and cost metrics.
 * `/clear` - Reset current conversation history in memory and clear the screen.
+* `/history` - List all saved chat sessions in this workspace.
 * `/wipe` - Wipe all saved session histories in this workspace.
 * `/exit` or `/quit` - Safely exit chat session and display utilization summary.
 
@@ -144,9 +145,9 @@ python -m unittest test_ant_agent.py
 - [x] **Context Optimization**: Automatic token-safe context compression and message truncation.
 - [x] **Zero-Config Search Fallback**: Seamless fallback to DuckDuckGo HTML search if Tavily API is missing.
 - [x] **XML + Native Tooling**: Support for native tool schemas as well as XML tags.
+- [x] **Improved stats on token consumption**: Support precise tracking by model name globally across sessions.
 
 ### Yet to Do
-- [ ] **Improved stats on cost and token consumption**: Support precise tracking for a wider range of model APIs and local providers.
 - [ ] **Improved long-term memory**: Integrate semantic reranking and smarter context truncation for vector embeddings.
 - [ ] **Improved TUI**: Add interactive menus, scrollable panels, and enhanced theme configuration.
 - [ ] **Multimodal inputs**: Integrate vision capabilities to analyze screenshots and local image/PDF files.

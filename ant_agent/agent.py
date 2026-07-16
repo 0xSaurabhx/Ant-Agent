@@ -31,6 +31,8 @@ class AntAgent:
         self.console = Console()
         self.session_prompt_tokens = 0
         self.session_completion_tokens = 0
+        self.session_tracked_prompt_tokens = 0
+        self.session_tracked_completion_tokens = 0
         
         # Session file setup
         self.sessions_dir = workspace_dir / ".ant_agent" / "sessions"
@@ -42,6 +44,16 @@ class AntAgent:
             
         self.session_file = self.sessions_dir / f"{self.session_id}.json"
         self.load_session()
+        
+        # Reconcile global stats with resumed session tokens
+        untracked_prompt = self.session_prompt_tokens - self.session_tracked_prompt_tokens
+        untracked_completion = self.session_completion_tokens - self.session_tracked_completion_tokens
+        if untracked_prompt > 0 or untracked_completion > 0:
+            self.record_global_usage(self.config.get("llm_model", "Unknown"), max(0, untracked_prompt), max(0, untracked_completion))
+            self.session_tracked_prompt_tokens = self.session_prompt_tokens
+            self.session_tracked_completion_tokens = self.session_completion_tokens
+            self.save_session()
+            
         self.init_client()
 
     def load_session(self):
@@ -52,14 +64,20 @@ class AntAgent:
                     self.history = data.get("history", [])
                     self.session_prompt_tokens = data.get("session_prompt_tokens", 0)
                     self.session_completion_tokens = data.get("session_completion_tokens", 0)
+                    self.session_tracked_prompt_tokens = data.get("session_tracked_prompt_tokens", 0)
+                    self.session_tracked_completion_tokens = data.get("session_tracked_completion_tokens", 0)
             except Exception:
                 self.history = []
                 self.session_prompt_tokens = 0
                 self.session_completion_tokens = 0
+                self.session_tracked_prompt_tokens = 0
+                self.session_tracked_completion_tokens = 0
         else:
             self.history = []
             self.session_prompt_tokens = 0
             self.session_completion_tokens = 0
+            self.session_tracked_prompt_tokens = 0
+            self.session_tracked_completion_tokens = 0
 
     def save_session(self):
         try:
@@ -116,6 +134,8 @@ class AntAgent:
                     "history": serialized_history,
                     "session_prompt_tokens": self.session_prompt_tokens,
                     "session_completion_tokens": self.session_completion_tokens,
+                    "session_tracked_prompt_tokens": self.session_tracked_prompt_tokens,
+                    "session_tracked_completion_tokens": self.session_tracked_completion_tokens,
                     "timestamp": datetime.now().isoformat()
                 }, f, indent=4)
         except Exception as e:
@@ -125,18 +145,67 @@ class AntAgent:
         self.history = []
         self.session_prompt_tokens = 0
         self.session_completion_tokens = 0
+        self.session_tracked_prompt_tokens = 0
+        self.session_tracked_completion_tokens = 0
         self.save_session()
 
     def wipe_all_sessions(self):
         self.history = []
         self.session_prompt_tokens = 0
         self.session_completion_tokens = 0
+        self.session_tracked_prompt_tokens = 0
+        self.session_tracked_completion_tokens = 0
         if self.sessions_dir.exists():
             for p in self.sessions_dir.glob("*.json"):
                 try:
                     p.unlink()
                 except Exception:
                     pass
+
+    def track_usage(self, model_name: str, prompt_tokens: int, completion_tokens: int):
+        self.session_prompt_tokens += prompt_tokens
+        self.session_completion_tokens += completion_tokens
+        self.session_tracked_prompt_tokens += prompt_tokens
+        self.session_tracked_completion_tokens += completion_tokens
+        self.save_session()
+        self.record_global_usage(model_name, prompt_tokens, completion_tokens)
+
+    def record_global_usage(self, model_name: str, prompt_tokens: int, completion_tokens: int):
+        from ant_agent.config import STATS_PATH
+        stats = {}
+        if STATS_PATH.exists():
+            try:
+                with open(STATS_PATH, "r") as f:
+                    stats = json.load(f)
+            except Exception:
+                stats = {}
+
+        if "models" not in stats:
+            stats["models"] = {}
+
+        m_entry = stats["models"].get(model_name, {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+        })
+
+        m_entry["prompt_tokens"] += prompt_tokens
+        m_entry["completion_tokens"] += completion_tokens
+        m_entry["total_tokens"] += (prompt_tokens + completion_tokens)
+        stats["models"][model_name] = m_entry
+
+        total_p = sum(m.get("prompt_tokens", 0) for m in stats["models"].values())
+        total_c = sum(m.get("completion_tokens", 0) for m in stats["models"].values())
+        stats["total_prompt_tokens"] = total_p
+        stats["total_completion_tokens"] = total_c
+        stats["total_total_tokens"] = total_p + total_c
+
+        try:
+            STATS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with open(STATS_PATH, "w") as f:
+                json.dump(stats, f, indent=4)
+        except Exception as e:
+            self.console.print(f"[bold red][-] Failed to save global stats: {e}[/bold red]")
 
     def init_client(self):
         self.client = openai.OpenAI(
@@ -273,6 +342,12 @@ class AntAgent:
             messages=messages,
             temperature=0.0
         )
+        if hasattr(response, "usage") and response.usage:
+            self.track_usage(
+                self.config["llm_model"],
+                getattr(response.usage, "prompt_tokens", 0),
+                getattr(response.usage, "completion_tokens", 0)
+            )
         return response.choices[0].message.content or ""
 
     def parse_tool_call(self, text: str):
@@ -308,6 +383,12 @@ class AntAgent:
             temperature=0.0,
             max_tokens=1000
         )
+        if hasattr(response, "usage") and response.usage:
+            self.track_usage(
+                triage_model,
+                getattr(response.usage, "prompt_tokens", 0),
+                getattr(response.usage, "completion_tokens", 0)
+            )
         return response.choices[0].message.content
 
     def triage_request(self, user_input: str) -> dict:
@@ -598,9 +679,11 @@ Do not include any markdown formatting (like ```json or ```) in your output. Ret
                     
                     response = self.client.chat.completions.create(**kwargs)
                     if hasattr(response, "usage") and response.usage:
-                        self.session_prompt_tokens += getattr(response.usage, "prompt_tokens", 0)
-                        self.session_completion_tokens += getattr(response.usage, "completion_tokens", 0)
-                        self.save_session()
+                        self.track_usage(
+                            self.config["llm_model"],
+                            getattr(response.usage, "prompt_tokens", 0),
+                            getattr(response.usage, "completion_tokens", 0)
+                        )
                 except Exception as e:
                     self.console.print(f"[bold red][-] LLM Error: {e}[/bold red]")
                     return "Failed to query the LLM model. Check base URL / model name configuration."
