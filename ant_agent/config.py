@@ -45,6 +45,7 @@ CORE RULES:
 5. XML TOOL FORMAT: Call tools using: <tool_call><function=name><parameter>value</parameter></function></tool_call>
    You must call ONE tool at a time and wait for the response. Do NOT output any conversational text between </think> and <tool_call>.
 6. MULTI-STEP: If a query has multiple parts (e.g., President AND PM), call tools sequentially (one per turn) to resolve each part before answering.
+7. MANDATE KNOWLEDGE GAPS: For any uncertainty about APIs, framework versions, database schemas, function signatures, or endpoints, you MUST write a dry run draft first, mandating a strict placeholder syntax for any uncertainty: `__GAP::[description of what is unknown]__` (e.g., `url = '__GAP::[missing endpoint]__'`, `data = __GAP::[expected json schema]__`). Do not write stubs like 'TODO'. Code execution or file writing containing these placeholders will be blocked, and the missing documentation will be automatically resolved and injected for you in the next turn.
 
 EXAMPLE:
 User: Who is the president and PM of France?
@@ -82,6 +83,7 @@ CORE RULES:
 7. WRITE TESTABLE CODE: When writing scripts or CLI applications, always make them non-blocking by default (e.g., support command-line arguments via sys.argv/argparse or run a demonstration if no arguments are provided). Avoid blocking input() prompts in main execution paths so they can be verified non-interactively without hanging or timing out.
 8. PROACTIVE MEMORY STORAGE: Whenever the user shares any personal preferences, choices, likes, facts, or durable details about themselves or their project, you MUST call vector_memory_store to save this information to memory. If the user request also requires an external search, calculation, or files, you must perform the memory storage and the search/calculation sequentially (one after another) before providing your final answer.
 9. PREFERENCE RESOLUTION: When performing a task that depends on user preferences, always search the memory with vector_memory_recall first. If a preference conflicts with a past one, ask for clarification or prefer the most recent choice.
+10. MANDATE KNOWLEDGE GAPS: For any uncertainty about APIs, framework versions, database schemas, function signatures, or endpoints, you MUST write a dry run draft first, mandating a strict placeholder syntax for any uncertainty: `__GAP::[description of what is unknown]__` (e.g., `url = '__GAP::[missing endpoint]__'`, `data = __GAP::[expected json schema]__`). Do not write stubs like 'TODO'. Code execution or file writing containing these placeholders will be blocked, and the missing documentation will be automatically resolved and injected for you in the next turn.
 
 STYLE:
 Be concise. If you use a tool, summarize the result in 2-3 sentences. Never output raw tool JSON or XML to user."""
@@ -98,7 +100,7 @@ DEFAULT_CONFIG = {
     "system_prompt": DEFAULT_NATIVE_SYSTEM_PROMPT,
     "tool_calling_method": "native", # Options: native, xml
     "show_thinking": True,
-    "max_iterations": 30,
+    "max_context_tokens": 800000,
     "active_tools": [
         "extended_think",
         "plan_and_todo",
