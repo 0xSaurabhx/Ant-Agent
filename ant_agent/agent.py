@@ -1,14 +1,19 @@
+import os
 import re
 import json
 import uuid
 import openai
 from pathlib import Path
 from datetime import datetime
-from colorama import Fore, Style
 from rich.console import Console
 from rich.panel import Panel
 from ant_agent import tools
 from ant_agent.memory import SimpleVectorDB
+from ant_agent.tui_theme import (
+    BOX_TOOL_CALL, BOX_TOOL_RESPONSE, BOX_PLAN,
+    ICON_BOLT, ICON_CHECK, ICON_CLIPBOARD,
+    ACCENT_CYAN, ACCENT_GREEN, ACCENT_YELLOW, ACCENT_BLUE,
+)
 
 # Import tools modules to ensure they are registered
 import ant_agent.tools.core
@@ -675,10 +680,11 @@ Do not include any markdown formatting (like ```json or ```) in your output. Ret
                 if verbose:
                     param_display = tool_param if len(tool_param) < 300 else tool_param[:300] + "..."
                     self.console.print(Panel(
-                        f"[cyan]{param_display}[/cyan]",
-                        title=f"[bold yellow]Tool Call (Direct): {tool_name}[/bold yellow]",
+                        f"[{ACCENT_CYAN}]{param_display}[/{ACCENT_CYAN}]",
+                        title=f"[bold {ACCENT_YELLOW}]{ICON_BOLT} {tool_name}[/bold {ACCENT_YELLOW}]",
                         expand=False,
-                        border_style="yellow"
+                        border_style=ACCENT_YELLOW,
+                        box=BOX_TOOL_CALL,
                     ))
                 
                 try:
@@ -693,10 +699,11 @@ Do not include any markdown formatting (like ```json or ```) in your output. Ret
                 if verbose:
                     res_display = result if len(result) < 500 else result[:500] + "...\n(Truncated)"
                     self.console.print(Panel(
-                        f"[green]{res_display}[/green]",
-                        title=f"[bold green]Tool Response[/bold green]",
+                        f"[{ACCENT_GREEN}]{res_display}[/{ACCENT_GREEN}]",
+                        title=f"[bold {ACCENT_GREEN}]{ICON_CHECK} Response[/bold {ACCENT_GREEN}]",
                         expand=False,
-                        border_style="green"
+                        border_style=ACCENT_GREEN,
+                        box=BOX_TOOL_RESPONSE,
                     ))
                 
                 # Append tool call and response to history
@@ -803,9 +810,10 @@ Do not include any markdown formatting (like ```json or ```) in your output. Ret
                             status_callback("print", f"[bold green][DONE][/bold green] Task decomposed.")
                             status_callback("print", Panel(
                                 decomposition,
-                                title="[bold blue]Decomposed Task DAG[/bold blue]",
-                                border_style="blue",
-                                expand=False
+                                title=f"[bold {ACCENT_BLUE}]{ICON_CLIPBOARD} Task DAG[/bold {ACCENT_BLUE}]",
+                                border_style=ACCENT_BLUE,
+                                box=BOX_PLAN,
+                                expand=False,
                             ))
                         
                         # Parse steps and add to plan_and_todo list
@@ -945,10 +953,11 @@ Do not include any markdown formatting (like ```json or ```) in your output. Ret
                             if verbose:
                                 param_display = tool_param if len(tool_param) < 300 else tool_param[:300] + "..."
                                 self.console.print(Panel(
-                                    f"[cyan]{param_display}[/cyan]",
-                                    title=f"[bold yellow]Tool Call: {tool_name}[/bold yellow]",
+                                    f"[{ACCENT_CYAN}]{param_display}[/{ACCENT_CYAN}]",
+                                    title=f"[bold {ACCENT_YELLOW}]{ICON_BOLT} {tool_name}[/bold {ACCENT_YELLOW}]",
                                     expand=False,
-                                    border_style="yellow"
+                                    border_style=ACCENT_YELLOW,
+                                    box=BOX_TOOL_CALL,
                                 ))
          
                             if status_callback:
@@ -967,10 +976,11 @@ Do not include any markdown formatting (like ```json or ```) in your output. Ret
                             if verbose:
                                 res_display = result if len(result) < 500 else result[:500] + "...\n(Truncated)"
                                 self.console.print(Panel(
-                                    f"[green]{res_display}[/green]",
-                                    title=f"[bold green]Tool Response[/bold green]",
+                                    f"[{ACCENT_GREEN}]{res_display}[/{ACCENT_GREEN}]",
+                                    title=f"[bold {ACCENT_GREEN}]{ICON_CHECK} Response[/bold {ACCENT_GREEN}]",
                                     expand=False,
-                                    border_style="green"
+                                    border_style=ACCENT_GREEN,
+                                    box=BOX_TOOL_RESPONSE,
                                 ))
          
                             if self.config.get("tool_calling_method") == "native" and not tool_call.id.startswith("mock"):
