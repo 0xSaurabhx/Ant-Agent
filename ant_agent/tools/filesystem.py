@@ -45,6 +45,13 @@ class FilesystemWriteTool(BaseTool):
             
             rel_path = parts[0].strip()
             content = parts[1].lstrip("\n")
+            
+            # Check for unresolved knowledge gaps
+            import re
+            gaps = re.findall(r'__GAP::\[?([^\]\n]+)\]?__', content)
+            if gaps:
+                return f"Error: File writing blocked due to unresolved Knowledge Gaps: {gaps}. You must resolve these gaps before saving."
+            
             path = safe_path(rel_path)
             
             # Create directories if they do not exist
@@ -83,6 +90,12 @@ class FilesystemEditTool(BaseTool):
             
             search_text = search_parts[1].strip("\r\n")
             replace_text = replace_part.strip("\r\n")
+            
+            # Check for unresolved knowledge gaps
+            import re
+            gaps = re.findall(r'__GAP::\[?([^\]\n]+)\]?__', replace_text)
+            if gaps:
+                return f"Error: File editing blocked due to unresolved Knowledge Gaps: {gaps}. You must resolve these gaps before saving."
             
             path = safe_path(rel_path)
             if not path.is_file():
@@ -164,6 +177,12 @@ class CodeRunnerWithTestsTool(BaseTool):
         try:
             # Only run commands inside workspace
             cmd = parameter.strip()
+            
+            # Check for unresolved knowledge gaps
+            import re
+            gaps = re.findall(r'__GAP::\[?([^\]\n]+)\]?__', cmd)
+            if gaps:
+                return f"Error: Test/command execution blocked due to unresolved Knowledge Gaps: {gaps}."
             # Run test safely
             result = subprocess.run(
                 cmd,

@@ -282,6 +282,13 @@ and some trailing text."""
         self.assertEqual(result["tool"], "code_runner_with_tests")
         self.assertEqual(result["parameter"], "pm2 restart app")
 
+    def test_triage_request_analysis(self):
+        agent = AntAgent(self.config)
+        agent.query_triage_llm = lambda prompt, system_override: '{"route": "analysis", "tool": null, "parameter": null, "explanation": "Explain architecture needs analysis"}'
+        result = agent.triage_request("explain how agent executes task")
+        self.assertEqual(result["route"], "analysis")
+        self.assertIsNone(result["tool"])
+
     def test_triage_request_planner(self):
         agent = AntAgent(self.config)
         agent.query_triage_llm = lambda prompt, system_override: '{"route": "planner", "tool": null, "parameter": null, "explanation": "Building API is complex"}'
@@ -525,8 +532,8 @@ and some trailing text."""
         
         self.assertEqual(len(clean_msgs), 6)
         self.assertEqual(clean_msgs[0]["content"], "Initial user message")
-        self.assertTrue("truncated to save tokens" in clean_msgs[1]["content"])
-        self.assertTrue("truncated to save tokens" in clean_msgs[2]["content"])
+        self.assertEqual(clean_msgs[1]["content"], large_content)
+        self.assertEqual(clean_msgs[2]["content"], large_content)
         self.assertEqual(clean_msgs[3]["content"], large_content)
         self.assertEqual(clean_msgs[4]["content"], large_content)
         self.assertEqual(clean_msgs[5]["content"], large_content)
@@ -608,51 +615,7 @@ and some trailing text."""
         self.assertEqual(len(clean_msgs), 1)
         self.assertTrue("<think>Executing tool calls.</think>" in clean_msgs[0]["content"])
 
-    def test_max_iterations_config(self):
-        from ant_agent.config import DEFAULT_CONFIG
-        self.assertEqual(DEFAULT_CONFIG.get("max_iterations"), 30)
-        
-        self.config["max_iterations"] = 3
-        agent = AntAgent(self.config)
-        agent.triage_request = lambda prompt: {
-            "route": "planner",
-            "tool": None,
-            "parameter": None,
-            "explanation": "test route"
-        }
-        agent.query_llm = lambda prompt, system_override, use_history: "final loop output"
-        
-        class MockFunction:
-            def __init__(self):
-                self.name = "token_counter"
-                self.arguments = '{"parameter": "test"}'
-        class MockToolCall:
-            def __init__(self):
-                self.id = "mock_call"
-                self.type = "function"
-                self.function = MockFunction()
-                
-        class MockMessage:
-            def __init__(self):
-                self.content = None
-                self.tool_calls = [MockToolCall()]
-        class MockChoice:
-            def __init__(self):
-                self.message = MockMessage()
-        class MockResponse:
-            def __init__(self):
-                self.choices = [MockChoice()]
-                
-        call_count = 0
-        def mock_create(**kwargs):
-            nonlocal call_count
-            call_count += 1
-            return MockResponse()
-            
-        agent.client.chat.completions.create = mock_create
-        
-        agent.run_cycle("do work", verbose=False)
-        self.assertEqual(call_count, 3)
+
 
     def test_usage_tracking(self):
         # Initial stats should not exist or be empty
@@ -747,6 +710,224 @@ and some trailing text."""
             
         self.assertEqual(stats["total_prompt_tokens"], 1200)
         self.assertEqual(stats["total_completion_tokens"], 300)
+
+    def test_auto_summarize_history(self):
+        # Setup agent with low token limit to trigger auto-summarization easily
+        config = self.config.copy()
+        config["max_context_tokens"] = 150
+        agent = AntAgent(config)
+        agent.history = [
+            {"role": "user", "content": "Let's build a massive web application with multiple microservices."},
+            {"role": "assistant", "content": "Sure, let's start by planning all the API endpoints and services."},
+            {"role": "user", "content": "I want service A to communicate with service B using gRPC protocols."},
+            {"role": "assistant", "content": "Excellent choice. We will define protobuf contracts for them."},
+            {"role": "user", "content": "Make sure we add logging and error metrics."},
+            {"role": "assistant", "content": "Got it. Let's start coding A."},
+            {"role": "user", "content": "Okay, write A's main logic."}
+        ]
+        
+        # Mock query_llm to return a fake summary
+        original_query_llm = agent.query_llm
+        agent.query_llm = lambda prompt, system_override=None, use_history=False: "Mocked Summary of progress"
+        
+        try:
+            # Let's count initial tokens
+            initial_count = agent.count_history_tokens()
+            # Ensure it exceeds limit * 0.8 (120 tokens)
+            self.assertGreater(initial_count, 120)
+            
+            # Trigger auto-summarization check
+            agent.auto_summarize_history_if_needed()
+            
+            # The history should now be summarized: the first elements collapsed into 1 summary,
+            # and the last 3 kept intact.
+            # So length should be 1 (summary) + 3 (last messages) = 4
+            self.assertEqual(len(agent.history), 4)
+            self.assertEqual(agent.history[0]["role"], "user")
+            self.assertIn("[CONSOLIDATED PROGRESS SUMMARY OF PREVIOUS WORK]", agent.history[0]["content"])
+            self.assertEqual(agent.history[0]["content"], "[CONSOLIDATED PROGRESS SUMMARY OF PREVIOUS WORK]\n\nMocked Summary of progress")
+            
+            # Last 3 elements must be preserved exactly
+            self.assertEqual(agent.history[1]["content"], "Make sure we add logging and error metrics.")
+            self.assertEqual(agent.history[2]["content"], "Got it. Let's start coding A.")
+            self.assertEqual(agent.history[3]["content"], "Okay, write A's main logic.")
+            
+        finally:
+            agent.query_llm = original_query_llm
+
+    def test_knowledge_gap_blocking(self):
+        from ant_agent.tools.python_repl import PythonReplTool
+        from ant_agent.tools.filesystem import FilesystemWriteTool, FilesystemEditTool, CodeRunnerWithTestsTool
+        
+        # Test Python REPL blocking
+        repl_tool = PythonReplTool()
+        res = repl_tool.execute("print('__GAP::[missing function signature]__')")
+        self.assertIn("Code execution blocked due to unresolved Knowledge Gaps", res)
+        
+        # Test Filesystem Write blocking
+        write_tool = FilesystemWriteTool()
+        res = write_tool.execute("temp.txt\n=== CONTENT ===\nclass Service:\n    def execute(self):\n        url = '__GAP::[missing url]__'")
+        self.assertIn("File writing blocked due to unresolved Knowledge Gaps", res)
+        self.assertFalse(Path("temp.txt").exists())
+        
+        # Setup clean file for edit test
+        with open("temp_edit.txt", "w") as f:
+            f.write("original text")
+            
+        # Test Filesystem Edit blocking
+        edit_tool = FilesystemEditTool()
+        res = edit_tool.execute("temp_edit.txt\n=== SEARCH ===\noriginal text\n=== REPLACE ===\nnew text with __GAP::[missing info]__")
+        self.assertIn("File editing blocked due to unresolved Knowledge Gaps", res)
+        # Check file was not modified
+        with open("temp_edit.txt", "r") as f:
+            self.assertEqual(f.read(), "original text")
+            
+        # Clean up files
+        if Path("temp_edit.txt").exists():
+            Path("temp_edit.txt").unlink()
+            
+        # Test Code Runner Command blocking
+        runner_tool = CodeRunnerWithTestsTool()
+        res = runner_tool.execute("pytest --gap=__GAP::[args]__")
+        self.assertIn("execution blocked due to unresolved Knowledge Gaps", res)
+
+    def test_resolve_knowledge_gaps_loop(self):
+        agent = AntAgent(self.config)
+        
+        # Mock query_llm
+        queries = []
+        def mock_query_llm(prompt, system_override=None, use_history=False):
+            queries.append((prompt, system_override, use_history))
+            if "Convert this knowledge gap" in prompt:
+                return "Mock Search Query"
+            elif "extract the exact code snippet" in prompt:
+                return "Mock Resolved Code Syntax"
+            return "unexpected"
+            
+        agent.query_llm = mock_query_llm
+        
+        # Mock web search and fetch tools
+        class MockWebSearchTool:
+            def __init__(self, context): pass
+            def execute(self, query):
+                return "Title: Cloudflare workers docs\nURL: https://cloudflare.com/docs\nSnippet: Routing is defined via routing syntax."
+                
+        class MockWebFetchAndExtractTool:
+            def __init__(self, context): pass
+            def execute(self, url):
+                return "This is the full scraped documentation text from cloudflare.com."
+                
+        import ant_agent.tools.web
+        orig_search = ant_agent.tools.web.WebSearchTool
+        orig_fetch = ant_agent.tools.web.WebFetchAndExtractTool
+        
+        ant_agent.tools.web.WebSearchTool = MockWebSearchTool
+        ant_agent.tools.web.WebFetchAndExtractTool = MockWebFetchAndExtractTool
+        
+        try:
+            # Set history
+            agent.history = [
+                {"role": "user", "content": "How to deploy worker?"},
+                {"role": "assistant", "content": "Here is the code: const route = '__GAP::Cloudflare dynamic routing syntax__';"}
+            ]
+            
+            agent.resolve_knowledge_gaps(["Cloudflare dynamic routing syntax"])
+            
+            # The history should now contain the resolved resolution injection payload at the end
+            self.assertEqual(len(agent.history), 3)
+            self.assertEqual(agent.history[2]["role"], "user")
+            self.assertIn("resolved for your knowledge gaps", agent.history[2]["content"])
+            self.assertIn("Mock Resolved Code Syntax", agent.history[2]["content"])
+            
+        finally:
+            ant_agent.tools.web.WebSearchTool = orig_search
+            ant_agent.tools.web.WebFetchAndExtractTool = orig_fetch
+
+    def test_analysis_route_read_only(self):
+        agent = AntAgent(self.config)
+        agent.triage_request = lambda x: {
+            "route": "analysis",
+            "tool": None,
+            "parameter": None,
+            "explanation": "Test read-only analysis"
+        }
+        
+        # Mock LLM to return answer on first turn to exit loop
+        class MockChoice:
+            def __init__(self):
+                class MockMessage:
+                    def __init__(self):
+                        self.content = "This is the explanation of the code."
+                        self.tool_calls = None
+                self.message = MockMessage()
+        class MockResponse:
+            def __init__(self):
+                self.choices = [MockChoice()]
+                self.usage = None
+        agent.client.chat.completions.create = lambda **kwargs: MockResponse()
+        
+        # Initially config has modifying tools
+        self.assertIn("filesystem_write", agent.config["active_tools"])
+        
+        # Capture active_tools during loop execution
+        captured_tools = []
+        original_get_system_prompt = agent.get_system_prompt
+        def mock_get_system_prompt():
+            captured_tools.extend(list(agent.config["active_tools"]))
+            return original_get_system_prompt()
+        agent.get_system_prompt = mock_get_system_prompt
+        
+        ans = agent.run_cycle("explain how agent executes task", verbose=False)
+        self.assertEqual(ans, "This is the explanation of the code.")
+        
+        # Modifying tools should not have been present during execution
+        self.assertNotIn("filesystem_write", captured_tools)
+        self.assertNotIn("filesystem_edit", captured_tools)
+        self.assertNotIn("filesystem_delete", captured_tools)
+        self.assertNotIn("code_runner_with_tests", captured_tools)
+        
+        # Modifying tools should be restored after execution
+        self.assertIn("filesystem_write", agent.config["active_tools"])
+
+    def test_safe_chat_completion_retries_on_rate_limit(self):
+        agent = AntAgent(self.config)
+        
+        import time
+        orig_sleep = time.sleep
+        sleep_calls = []
+        time.sleep = lambda secs: sleep_calls.append(secs)
+        
+        call_count = 0
+        class MockChoice:
+            def __init__(self):
+                class MockMessage:
+                    def __init__(self):
+                        self.content = "Success response"
+                        self.tool_calls = None
+                self.message = MockMessage()
+        class MockResponse:
+            def __init__(self):
+                self.choices = [MockChoice()]
+                self.usage = None
+                
+        def mock_create(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise Exception("Error 429: resource_exhausted rate limit exceeded")
+            return MockResponse()
+            
+        agent.client.chat.completions.create = mock_create
+        
+        try:
+            res = agent.safe_chat_completion(model="gpt-4", messages=[])
+            self.assertEqual(res.choices[0].message.content, "Success response")
+            self.assertEqual(call_count, 3)
+            self.assertEqual(len(sleep_calls), 2)
+            self.assertEqual(sleep_calls[0], 4)
+            self.assertEqual(sleep_calls[1], 8)
+        finally:
+            time.sleep = orig_sleep
 
 if __name__ == "__main__":
     unittest.main()

@@ -19,6 +19,12 @@ class PythonReplTool(BaseTool):
             code = code[:-3]
         code = code.strip()
 
+        # Check for unresolved knowledge gaps
+        import re
+        gaps = re.findall(r'__GAP::\[?([^\]\n]+)\]?__', code)
+        if gaps:
+            return f"Error: Code execution blocked due to unresolved Knowledge Gaps: {gaps}. You must resolve these gaps before executing."
+
         try:
             with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as temp:
                 temp.write(code)
