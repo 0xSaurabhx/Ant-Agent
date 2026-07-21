@@ -121,7 +121,8 @@ DEFAULT_CONFIG = {
         "self_critique",
         "decompose_task",
         "ask_clarifying_questions"
-    ]
+    ],
+    "authorization_required_tools": []
 }
 
 def load_config():

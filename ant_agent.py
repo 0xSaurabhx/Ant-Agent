@@ -273,13 +273,16 @@ def cmd_chat(args):
                 )
                 table.add_column("Tool", style=f"bold {ACCENT_CYAN}", no_wrap=True)
                 table.add_column("Description", style="white")
+                table.add_column("Authorization", style="bold yellow")
                 for tname in config.get("active_tools", []):
+                    requires_auth = agent.is_authorization_required(tname)
+                    auth_str = f"[{ACCENT_YELLOW}]Required[/{ACCENT_YELLOW}]" if requires_auth else f"[{ACCENT_DIM}]Auto[/{ACCENT_DIM}]"
                     try:
                         import ant_agent.tools as tools_mod
                         t_inst = tools_mod.get_tool(tname, agent)
-                        table.add_row(tname, t_inst.description)
+                        table.add_row(tname, t_inst.description, auth_str)
                     except Exception:
-                        table.add_row(tname, f"[{ACCENT_RED}]Failed to load[/{ACCENT_RED}]")
+                        table.add_row(tname, f"[{ACCENT_RED}]Failed to load[/{ACCENT_RED}]", auth_str)
                 console.print(table)
                 continue
 
@@ -398,8 +401,8 @@ def cmd_config(args):
         value = args.value
         if key not in config:
             console.print(f"  [{ACCENT_YELLOW}]{ICON_WARN} {key} is not a standard key, adding it.[/{ACCENT_YELLOW}]")
-        if key == "active_tools":
-            value = [t.strip() for t in value.split(",")]
+        if key in ("active_tools", "authorization_required_tools", "authorization_required"):
+            value = [t.strip() for t in value.split(",") if t.strip()]
         config[key] = value
         if save_config(config):
             console.print(f"  [{ACCENT_GREEN}]{ICON_CHECK} Updated: {key} = {value}[/{ACCENT_GREEN}]")

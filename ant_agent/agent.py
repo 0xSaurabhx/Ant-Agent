@@ -9,9 +9,10 @@ from rich.console import Console
 from rich.panel import Panel
 from ant_agent import tools
 from ant_agent.memory import SimpleVectorDB
+from ant_agent.config import load_config
 from ant_agent.tui_theme import (
     BOX_TOOL_CALL, BOX_TOOL_RESPONSE, BOX_PLAN,
-    ICON_BOLT, ICON_CHECK, ICON_CLIPBOARD,
+    ICON_BOLT, ICON_CHECK, ICON_CLIPBOARD, ICON_WARN,
     ACCENT_CYAN, ACCENT_GREEN, ACCENT_YELLOW, ACCENT_BLUE,
 )
 
@@ -274,6 +275,57 @@ class AntAgent:
                 pass
         tools_str = "\n".join(available_tools)
         return f"{base_prompt}\n\nAVAILABLE TOOLS:\n{tools_str}"
+
+    def is_authorization_required(self, tool_name: str) -> bool:
+        auth_tools = self.config.get("authorization_required_tools")
+        if auth_tools is None:
+            auth_tools = self.config.get("authorization_required")
+        if auth_tools is None:
+            try:
+                latest = load_config()
+                auth_tools = latest.get("authorization_required_tools", latest.get("authorization_required", []))
+            except Exception:
+                auth_tools = []
+        if not isinstance(auth_tools, list):
+            auth_tools = []
+        return tool_name in auth_tools
+
+    def request_tool_authorization(self, tool_name: str, tool_param: str, status_callback=None, authorization_callback=None) -> bool:
+        if not self.is_authorization_required(tool_name):
+            return True
+
+        if status_callback:
+            status_callback("print", f"[bold yellow]{ICON_WARN} Authorization Required for Tool: '{tool_name}'[/bold yellow]")
+
+        if callable(authorization_callback):
+            return bool(authorization_callback(tool_name, tool_param))
+
+        if hasattr(self, "authorization_callback") and callable(getattr(self, "authorization_callback", None)):
+            return bool(self.authorization_callback(tool_name, tool_param))
+
+        param_preview = tool_param if len(tool_param) < 400 else tool_param[:400] + "... (truncated)"
+        self.console.print(Panel(
+            f"[bold cyan]Tool:[/bold cyan] {tool_name}\n[bold cyan]Parameters:[/bold cyan]\n{param_preview}",
+            title=f"[bold yellow]{ICON_WARN} Authorization Request[/bold yellow]",
+            border_style=ACCENT_YELLOW,
+            box=BOX_TOOL_CALL,
+            expand=False
+        ))
+
+        try:
+            ans = input(f"Approve execution of tool '{tool_name}'? (y/n): ").strip().lower()
+            return ans in ["y", "yes"]
+        except (KeyboardInterrupt, EOFError):
+            return False
+
+    def _execute_tool_with_auth(self, tool_name: str, tool_param: str, status_callback=None, authorization_callback=None) -> str:
+        if not self.request_tool_authorization(tool_name, tool_param, status_callback=status_callback, authorization_callback=authorization_callback):
+            if status_callback:
+                status_callback("print", f"[bold red][DENIED][/bold red] User denied authorization for {tool_name}")
+            return f"Tool execution denied by user: Permission for '{tool_name}' was not granted."
+
+        tool_instance = tools.get_tool(tool_name, self)
+        return tool_instance.execute(tool_param)
 
     def get_clean_history_messages(self) -> list:
         """
@@ -635,7 +687,7 @@ Do not include any markdown formatting (like ```json or ```) in your output. Ret
                 "explanation": f"Failed to parse triage JSON: {e}"
             }
 
-    def run_cycle(self, user_input: str, verbose: bool = True, status_callback=None):
+    def run_cycle(self, user_input: str, verbose: bool = True, status_callback=None, authorization_callback=None):
         # Check if it is a continuation command
         is_continuation = False
         todo_path = Path.cwd() / ".ant_agent" / "todo.json"
@@ -688,13 +740,15 @@ Do not include any markdown formatting (like ```json or ```) in your output. Ret
                     ))
                 
                 try:
-                    tool_instance = tools.get_tool(tool_name, self)
-                    result = tool_instance.execute(tool_param)
+                    result = self._execute_tool_with_auth(tool_name, tool_param, status_callback=status_callback, authorization_callback=authorization_callback)
                 except Exception as e:
                     result = f"Error executing tool: {e}"
                 
                 if status_callback:
-                    status_callback("print", f"[bold green][DONE][/bold green] Executed {tool_name}")
+                    if result.startswith("Tool execution denied"):
+                        status_callback("print", f"[bold red][DENIED][/bold red] Denied {tool_name}")
+                    else:
+                        status_callback("print", f"[bold green][DONE][/bold green] Executed {tool_name}")
                 
                 if verbose:
                     res_display = result if len(result) < 500 else result[:500] + "...\n(Truncated)"
@@ -963,13 +1017,15 @@ Do not include any markdown formatting (like ```json or ```) in your output. Ret
                             if status_callback:
                                 status_callback("update", f"[bold yellow]Executing {tool_name}...[/bold yellow]")
                             try:
-                                tool_instance = tools.get_tool(tool_name, self)
-                                result = tool_instance.execute(tool_param)
+                                result = self._execute_tool_with_auth(tool_name, tool_param, status_callback=status_callback, authorization_callback=authorization_callback)
                             except Exception as e:
                                 result = f"Error executing tool: {e}"
 
                             if status_callback:
-                                status_callback("print", f"[bold green][DONE][/bold green] Executed {tool_name}")
+                                if result.startswith("Tool execution denied"):
+                                    status_callback("print", f"[bold red][DENIED][/bold red] Denied {tool_name}")
+                                else:
+                                    status_callback("print", f"[bold green][DONE][/bold green] Executed {tool_name}")
                                 import time
                                 time.sleep(0.1)
 
