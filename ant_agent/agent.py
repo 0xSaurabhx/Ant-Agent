@@ -7,6 +7,7 @@ from pathlib import Path
 from datetime import datetime
 from rich.console import Console
 from rich.panel import Panel
+from rich.text import Text
 from ant_agent import tools
 from ant_agent.memory import SimpleVectorDB
 from ant_agent.config import load_config
@@ -49,6 +50,11 @@ class AntAgent:
             self.session_id = uuid.uuid4().hex
             
         self.session_file = self.sessions_dir / f"{self.session_id}.json"
+
+        # Episodic (Session) Memory setup
+        episodic_memory_file = self.sessions_dir / f"{self.session_id}_memory.json"
+        self.episodic_db = SimpleVectorDB(config, memory_file=episodic_memory_file)
+        self.session_db = self.episodic_db  # Alias
         self.load_session()
         
         # Reconcile global stats with resumed session tokens
@@ -147,12 +153,84 @@ class AntAgent:
         except Exception as e:
             self.console.print(f"[bold red][-] Failed to save session: {e}[/bold red]")
 
+    def get_session_todo_path(self) -> Path:
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        return self.sessions_dir / f"{self.session_id}_todo.json"
+
+    def request_memory_scope_selection(self, text: str, proposed_scope: str = None, memory_scope_callback=None) -> str:
+        """
+        Interactively ask user which memory scope to store a fact/memory in:
+        1: session (episodic, temporary to current session)
+        2: workspace (saved for current project workspace)
+        3: global (saved across all projects)
+        """
+        valid_scopes = {
+            "1": "session", "2": "workspace", "3": "global",
+            "session": "session", "episodic": "session", "temp": "session",
+            "workspace": "workspace", "global": "global"
+        }
+
+        if proposed_scope and str(proposed_scope).lower() in valid_scopes:
+            return valid_scopes[str(proposed_scope).lower()]
+
+        if callable(memory_scope_callback):
+            res = memory_scope_callback(text)
+            if res and str(res).lower() in valid_scopes:
+                return valid_scopes[str(res).lower()]
+            return "session"
+
+        if hasattr(self, "memory_scope_callback") and callable(getattr(self, "memory_scope_callback", None)):
+            res = self.memory_scope_callback(text)
+            if res and str(res).lower() in valid_scopes:
+                return valid_scopes[str(res).lower()]
+            return "session"
+
+        import sys
+        if not self.config.get("interactive_memory_scope", True) or not sys.stdin.isatty():
+            workspace_keywords = ["project", "code", "file", "folder", "directory", "workspace", "repo", "compile", "build", "git", "go", "python", "rust", "programming", "agent", "bug", "issue", "todo"]
+            if any(kw in text.lower() for kw in workspace_keywords):
+                return "workspace"
+            return "session"
+
+        preview = text if len(text) < 300 else text[:300] + "... (truncated)"
+        from ant_agent.tui_theme import BOX_TOOL_CALL, ACCENT_CYAN, ICON_BRAIN
+
+        self.console.print(Panel(
+            Text.from_markup(
+                f"[bold cyan]Fact / Memory:[/bold cyan]\n{preview}\n\n"
+                f"[bold yellow]Select Scope:[/bold yellow]\n"
+                f"  [1] Session / Episodic [dim](Temporary to this chat session)[/dim]\n"
+                f"  [2] Workspace [dim](Saved for this project)[/dim]\n"
+                f"  [3] Global [dim](Saved across all projects)[/dim]",
+                overflow="fold"
+            ),
+            title=f"[bold cyan]{ICON_BRAIN} Memory Scope Selection[/bold cyan]",
+            border_style=ACCENT_CYAN,
+            box=BOX_TOOL_CALL,
+            expand=False
+        ))
+
+        try:
+            choice = input("Select storage target [1=Session, 2=Workspace, 3=Global] (default 1): ").strip().lower()
+            return valid_scopes.get(choice, "session")
+        except (KeyboardInterrupt, EOFError, Exception):
+            return "session"
+
     def clear_session(self):
         self.history = []
         self.session_prompt_tokens = 0
         self.session_completion_tokens = 0
         self.session_tracked_prompt_tokens = 0
         self.session_tracked_completion_tokens = 0
+        if hasattr(self, "episodic_db"):
+            self.episodic_db.data = []
+            self.episodic_db.save()
+        todo_path = self.get_session_todo_path()
+        if todo_path.exists():
+            try:
+                todo_path.unlink()
+            except Exception:
+                pass
         self.save_session()
 
     def wipe_all_sessions(self):
@@ -161,8 +239,11 @@ class AntAgent:
         self.session_completion_tokens = 0
         self.session_tracked_prompt_tokens = 0
         self.session_tracked_completion_tokens = 0
+        if hasattr(self, "episodic_db"):
+            self.episodic_db.data = []
+            self.episodic_db.save()
         if self.sessions_dir.exists():
-            for p in self.sessions_dir.glob("*.json"):
+            for p in self.sessions_dir.glob("*"):
                 try:
                     p.unlink()
                 except Exception:
@@ -305,7 +386,7 @@ class AntAgent:
 
         param_preview = tool_param if len(tool_param) < 400 else tool_param[:400] + "... (truncated)"
         self.console.print(Panel(
-            f"[bold cyan]Tool:[/bold cyan] {tool_name}\n[bold cyan]Parameters:[/bold cyan]\n{param_preview}",
+            Text.from_markup(f"[bold cyan]Tool:[/bold cyan] {tool_name}\n[bold cyan]Parameters:[/bold cyan]\n{param_preview}", overflow="fold"),
             title=f"[bold yellow]{ICON_WARN} Authorization Request[/bold yellow]",
             border_style=ACCENT_YELLOW,
             box=BOX_TOOL_CALL,
@@ -863,7 +944,7 @@ Do not include any markdown formatting (like ```json or ```) in your output. Ret
                         if status_callback:
                             status_callback("print", f"[bold green][DONE][/bold green] Task decomposed.")
                             status_callback("print", Panel(
-                                decomposition,
+                                Text(decomposition, overflow="fold"),
                                 title=f"[bold {ACCENT_BLUE}]{ICON_CLIPBOARD} Task DAG[/bold {ACCENT_BLUE}]",
                                 border_style=ACCENT_BLUE,
                                 box=BOX_PLAN,
@@ -1007,7 +1088,7 @@ Do not include any markdown formatting (like ```json or ```) in your output. Ret
                             if verbose:
                                 param_display = tool_param if len(tool_param) < 300 else tool_param[:300] + "..."
                                 self.console.print(Panel(
-                                    f"[{ACCENT_CYAN}]{param_display}[/{ACCENT_CYAN}]",
+                                    Text.from_markup(f"[{ACCENT_CYAN}]{param_display}[/{ACCENT_CYAN}]", overflow="fold"),
                                     title=f"[bold {ACCENT_YELLOW}]{ICON_BOLT} {tool_name}[/bold {ACCENT_YELLOW}]",
                                     expand=False,
                                     border_style=ACCENT_YELLOW,
@@ -1032,7 +1113,7 @@ Do not include any markdown formatting (like ```json or ```) in your output. Ret
                             if verbose:
                                 res_display = result if len(result) < 500 else result[:500] + "...\n(Truncated)"
                                 self.console.print(Panel(
-                                    f"[{ACCENT_GREEN}]{res_display}[/{ACCENT_GREEN}]",
+                                    Text.from_markup(f"[{ACCENT_GREEN}]{res_display}[/{ACCENT_GREEN}]", overflow="fold"),
                                     title=f"[bold {ACCENT_GREEN}]{ICON_CHECK} Response[/bold {ACCENT_GREEN}]",
                                     expand=False,
                                     border_style=ACCENT_GREEN,

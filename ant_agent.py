@@ -19,7 +19,7 @@ from pathlib import Path
 from ant_agent.config import load_config, save_config
 from ant_agent.agent import AntAgent
 from ant_agent.tui_theme import (
-    BANNER, THIN_RULE,
+    BANNER, THIN_RULE, get_banner, get_rule,
     ICON_ANT, ICON_BOLT, ICON_BRAIN, ICON_CLIPBOARD, ICON_CHECK,
     ICON_GEAR, ICON_SEARCH, ICON_CHART, ICON_PLUG, ICON_WAVE,
     ICON_KEY, ICON_CLOCK, ICON_WARN, ICON_ROCKET, ICON_FOLDER,
@@ -40,7 +40,7 @@ def _fmt_tokens(n):
 
 # ─── Welcome Banner ──────────────────────────────────────────────
 def print_welcome(console, config, agent):
-    console.print(BANNER)
+    console.print(get_banner(console.width))
     console.print(THIN_RULE)
 
     # Info grid — compact key-value pairs
@@ -68,7 +68,7 @@ def print_help(console):
         title_style=f"bold {ACCENT_CYAN}",
     )
     table.add_column("Command", style=f"bold {ACCENT_CYAN}", no_wrap=True)
-    table.add_column("Description", style="white")
+    table.add_column("Description", style="white", overflow="fold")
     commands = [
         ("/help",     f"{ICON_HELP}  Show this command reference"),
         ("/tools",    f"{ICON_PLUG}  List active tools and descriptions"),
@@ -182,8 +182,8 @@ def print_history_list(console):
         padding=(0, 1),
         title_style=f"bold {ACCENT_CYAN}",
     )
-    table.add_column("Session UUID", style=f"{ACCENT_CYAN}", no_wrap=True)
-    table.add_column("Last Active", style=f"{ACCENT_MAGENTA}")
+    table.add_column("Session UUID", style=f"{ACCENT_CYAN}", overflow="ellipsis")
+    table.add_column("Last Active", style=f"{ACCENT_MAGENTA}", overflow="fold")
     table.add_column("Messages", style=f"{ACCENT_GREEN}", justify="right")
 
     for p in sorted(sessions_dir.glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True):
@@ -272,8 +272,8 @@ def cmd_chat(args):
                     title_style=f"bold {ACCENT_CYAN}",
                 )
                 table.add_column("Tool", style=f"bold {ACCENT_CYAN}", no_wrap=True)
-                table.add_column("Description", style="white")
-                table.add_column("Authorization", style="bold yellow")
+                table.add_column("Description", style="white", overflow="fold")
+                table.add_column("Authorization", style="bold yellow", no_wrap=True)
                 for tname in config.get("active_tools", []):
                     requires_auth = agent.is_authorization_required(tname)
                     auth_str = f"[{ACCENT_YELLOW}]Required[/{ACCENT_YELLOW}]" if requires_auth else f"[{ACCENT_DIM}]Auto[/{ACCENT_DIM}]"
@@ -307,7 +307,7 @@ def cmd_chat(args):
                     title_style=f"bold {ACCENT_CYAN}",
                 )
                 table.add_column("Key", style=f"{ACCENT_CYAN}", no_wrap=True)
-                table.add_column("Value", style="white")
+                table.add_column("Value", style="white", overflow="fold")
                 for k, v in config.items():
                     display_v = str(v)
                     if k == "system_prompt":
@@ -353,7 +353,7 @@ def cmd_chat(args):
                     elif action == "thought":
                         if config.get("show_thinking", True):
                             console.print(Panel(
-                                f"[italic dim]{msg}[/italic dim]",
+                                Text(msg, style="italic dim", overflow="fold"),
                                 title=f"[{ACCENT_DIM}]{ICON_BRAIN} Thinking[/{ACCENT_DIM}]",
                                 border_style=ACCENT_BLUE,
                                 box=BOX_THINKING,
@@ -386,7 +386,7 @@ def cmd_config(args):
             padding=(0, 1),
         )
         table.add_column("Setting", style=f"{ACCENT_CYAN}", no_wrap=True)
-        table.add_column("Value", style="white")
+        table.add_column("Value", style="white", overflow="fold")
         for k, v in config.items():
             display_v = str(v)
             if k == "system_prompt":
@@ -426,11 +426,47 @@ def cmd_memory(args):
 
     if args.action == "add":
         text = " ".join(args.text)
-        agent.db.store(text)
-        console.print(f"  [{ACCENT_GREEN}]{ICON_CHECK} Stored: '{text}'[/{ACCENT_GREEN}]")
+        scope = getattr(args, "scope", None)
+        if scope:
+            target_scope = scope
+        else:
+            target_scope = agent.request_memory_scope_selection(text)
+
+        if target_scope in ["session", "episodic"]:
+            agent.episodic_db.store(text)
+            console.print(f"  [{ACCENT_GREEN}]{ICON_CHECK} Stored in Session (Episodic) Memory: '{text}'[/{ACCENT_GREEN}]")
+        elif target_scope == "workspace":
+            agent.workspace_db.store(text)
+            console.print(f"  [{ACCENT_GREEN}]{ICON_CHECK} Stored in Workspace Memory: '{text}'[/{ACCENT_GREEN}]")
+        elif target_scope == "global":
+            agent.global_db.store(text)
+            console.print(f"  [{ACCENT_GREEN}]{ICON_CHECK} Stored in Global Memory: '{text}'[/{ACCENT_GREEN}]")
+        else:
+            agent.db.store(text)
+            console.print(f"  [{ACCENT_GREEN}]{ICON_CHECK} Stored in Memory: '{text}'[/{ACCENT_GREEN}]")
     elif args.action == "query":
         query = " ".join(args.text)
-        results = agent.db.recall(query, limit=args.limit)
+        all_results = []
+        for r in agent.episodic_db.recall(query, limit=args.limit):
+            r["scope"] = "Episodic"
+            all_results.append(r)
+        for r in agent.workspace_db.recall(query, limit=args.limit):
+            r["scope"] = "Workspace"
+            all_results.append(r)
+        for r in agent.global_db.recall(query, limit=args.limit):
+            r["scope"] = "Global"
+            all_results.append(r)
+
+        all_results.sort(key=lambda x: x["score"], reverse=True)
+        seen = set()
+        unique_results = []
+        for r in all_results:
+            if r["text"] not in seen:
+                seen.add(r["text"])
+                unique_results.append(r)
+                if len(unique_results) >= args.limit:
+                    break
+
         table = Table(
             title=f"{ICON_SEARCH} Memory Results for '{query}'",
             show_header=True,
@@ -439,11 +475,12 @@ def cmd_memory(args):
             padding=(0, 1),
         )
         table.add_column("#", style=f"{ACCENT_YELLOW}", no_wrap=True)
+        table.add_column("Scope", style=f"{ACCENT_MAGENTA}", no_wrap=True)
         table.add_column("Score", style=f"{ACCENT_MAGENTA}", justify="right")
-        table.add_column("Content", style="white")
-        table.add_column("Timestamp", style=f"{ACCENT_DIM}")
-        for i, res in enumerate(results, 1):
-            table.add_row(str(i), f"{res['score']:.4f}", res['text'], str(res['timestamp']))
+        table.add_column("Content", style="white", overflow="fold")
+        table.add_column("Timestamp", style=f"{ACCENT_DIM}", overflow="fold")
+        for i, res in enumerate(unique_results, 1):
+            table.add_row(str(i), res.get("scope", "Memory"), f"{res['score']:.4f}", res['text'], str(res['timestamp']))
         console.print(table)
 
 # ─── Stats Command ───────────────────────────────────────────────
@@ -482,6 +519,7 @@ def main():
     memory_subparsers = memory_parser.add_subparsers(dest="action", required=True)
     add_parser = memory_subparsers.add_parser("add", help="Add new memory text block")
     add_parser.add_argument("text", nargs="+", help="Memory content to store")
+    add_parser.add_argument("--scope", choices=["session", "episodic", "workspace", "global"], help="Memory storage target scope")
     query_parser = memory_subparsers.add_parser("query", help="Search the memory store")
     query_parser.add_argument("text", nargs="+", help="Search query string")
     query_parser.add_argument("--limit", type=int, default=5, help="Number of records to show")

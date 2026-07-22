@@ -4,6 +4,7 @@ Zero external dependencies beyond Rich (already required).
 """
 from rich.box import ROUNDED, HEAVY, SIMPLE, DOUBLE
 from rich.style import Style
+from rich.rule import Rule
 
 # ─── Color Palette ────────────────────────────────────────────────
 # Curated accent colors for consistent visual identity.
@@ -75,5 +76,18 @@ BANNER = """[bright_cyan]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀�
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢡⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/bright_cyan]
   [bold bright_cyan]A N T   A G E N T[/bold bright_cyan]  [dim]· Local AI CLI Agent[/dim]"""
 
-# ─── Separator ───────────────────────────────────────────────────
-THIN_RULE = "[dim]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/dim]"
+COMPACT_BANNER = """  [bold bright_cyan]🐜  A N T   A G E N T[/bold bright_cyan]  [dim]· Local AI CLI Agent[/dim]"""
+
+def get_banner(console_width: int = 80) -> str:
+    """Return an appropriate banner based on the current terminal width."""
+    if console_width >= 115:
+        return BANNER
+    return COMPACT_BANNER
+
+# ─── Separator Rule ──────────────────────────────────────────────
+def get_rule(style: str = "dim cyan") -> Rule:
+    """Return a dynamic Rich Rule that auto-scales to terminal width."""
+    return Rule(style=style)
+
+# Backwards-compatible rule instance
+THIN_RULE = Rule(style="dim cyan")
