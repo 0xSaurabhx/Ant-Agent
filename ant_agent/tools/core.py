@@ -18,7 +18,9 @@ class PlanAndTodoTool(BaseTool):
     description = "Manage tasks: 'list', 'add <task>', 'complete <index>', 'clear'."
 
     def _get_todo_path(self) -> Path:
-        p = Path.cwd() / ".ant_agent" / "todo.json"
+        if self.context and hasattr(self.context, "get_session_todo_path"):
+            return self.context.get_session_todo_path()
+        p = Path.cwd() / ".ant_agent" / "sessions" / "default_todo.json"
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
 
@@ -101,25 +103,46 @@ class SelfCritiqueTool(BaseTool):
 @register_tool
 class VectorMemoryStoreTool(BaseTool):
     name = "vector_memory_store"
-    description = "Store a fact or text in long-term memory. Param: text to store."
+    description = "Store a fact or text in memory. Param: text string OR JSON object with 'text' and optional 'scope' ('session'/'episodic', 'workspace', 'global')."
 
     def execute(self, parameter: str) -> str:
         if not self.context:
             return "Error: No active agent context."
         try:
-            text = parameter.strip()
-            workspace_keywords = ["project", "code", "file", "folder", "directory", "workspace", "repo", "compile", "build", "git", "go", "python", "rust", "programming", "agent", "bug", "issue", "todo"]
-            is_workspace = any(kw in text.lower() for kw in workspace_keywords)
-            
-            if is_workspace and hasattr(self.context, "workspace_db"):
+            param_str = parameter.strip()
+            text = param_str
+            explicit_scope = None
+
+            if param_str.startswith("{") and param_str.endswith("}"):
+                try:
+                    data = json.loads(param_str)
+                    text = data.get("text", param_str)
+                    explicit_scope = data.get("scope")
+                except Exception:
+                    pass
+
+            valid_scopes = ["session", "episodic", "workspace", "global"]
+            if explicit_scope and str(explicit_scope).lower() in valid_scopes:
+                target_scope = str(explicit_scope).lower()
+            elif hasattr(self.context, "request_memory_scope_selection"):
+                target_scope = self.context.request_memory_scope_selection(text, proposed_scope=explicit_scope)
+            else:
+                target_scope = "session"
+
+            if target_scope in ["session", "episodic"] and hasattr(self.context, "episodic_db"):
+                self.context.episodic_db.store(text)
+                return "Fact stored in session (episodic) memory."
+            elif target_scope == "workspace" and hasattr(self.context, "workspace_db"):
                 self.context.workspace_db.store(text)
                 return "Fact stored in workspace memory."
-            elif hasattr(self.context, "global_db"):
+            elif target_scope == "global" and hasattr(self.context, "global_db"):
                 self.context.global_db.store(text)
                 return "Fact stored in global memory."
-            else:
+            elif hasattr(self.context, "db"):
                 self.context.db.store(text)
-                return "Fact stored in default memory."
+                return "Fact stored in memory."
+            else:
+                return "Error: Memory store unavailable."
         except Exception as e:
             return f"Error storing memory: {e}"
 
@@ -134,33 +157,50 @@ class VectorMemoryRecallTool(BaseTool):
         try:
             query = parameter.strip()
             all_results = []
-            if hasattr(self.context, "global_db"):
-                all_results.extend(self.context.global_db.recall(query, limit=3))
+            
+            # Query Episodic / Session memory
+            if hasattr(self.context, "episodic_db"):
+                for r in self.context.episodic_db.recall(query, limit=3):
+                    r["scope"] = "Episodic"
+                    all_results.append(r)
+                    
+            # Query Workspace memory
             if hasattr(self.context, "workspace_db"):
-                all_results.extend(self.context.workspace_db.recall(query, limit=3))
+                for r in self.context.workspace_db.recall(query, limit=3):
+                    r["scope"] = "Workspace"
+                    all_results.append(r)
+                    
+            # Query Global memory
+            if hasattr(self.context, "global_db"):
+                for r in self.context.global_db.recall(query, limit=3):
+                    r["scope"] = "Global"
+                    all_results.append(r)
             
             if not all_results and hasattr(self.context, "db"):
-                all_results.extend(self.context.db.recall(query, limit=3))
-                
+                for r in self.context.db.recall(query, limit=3):
+                    r["scope"] = "Default"
+                    all_results.append(r)
+                    
             if not all_results:
                 return "No relevant memories found."
             
-            # Sort by distance score (lower is better/closer)
-            all_results.sort(key=lambda x: x["score"])
+            # Sort by score descending (higher score is better)
+            all_results.sort(key=lambda x: x["score"], reverse=True)
             
-            # Deduplicate and limit to top 3
+            # Deduplicate and limit to top 5
             seen = set()
             unique_results = []
             for r in all_results:
                 if r["text"] not in seen:
                     seen.add(r["text"])
                     unique_results.append(r)
-                    if len(unique_results) >= 3:
+                    if len(unique_results) >= 5:
                         break
             
             out = []
             for r in unique_results:
-                out.append(f"- {r['text']} (stored: {r['timestamp']})")
+                scope = r.get("scope", "Memory")
+                out.append(f"- [{scope}] {r['text']} (stored: {r['timestamp']})")
             return "\n".join(out)
         except Exception as e:
             return f"Error recalling memory: {e}"

@@ -40,6 +40,7 @@ class TestAntAgent(unittest.TestCase):
         self.config = DEFAULT_CONFIG.copy()
         self.config["embedding_provider"] = "mock"
         self.config["llm_api_key"] = "mock"
+        self.config["interactive_memory_scope"] = False
         self.config["global_memory_file"] = Path(self.temp_dir.name) / ".ant_agent" / "global_memory.json"
         self.agent = AntAgent(self.config)
 
@@ -973,5 +974,91 @@ and some trailing text."""
         self.assertTrue(res.startswith("Tool execution denied by user"))
         self.assertIn("python_repl", res)
 
+    def test_tui_responsive_banner_and_rule(self):
+        from ant_agent.tui_theme import get_banner, get_rule, BANNER, COMPACT_BANNER
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ant_agent_cli", os.path.join(self.orig_cwd, "ant_agent.py"))
+        ant_agent_cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ant_agent_cli)
+        print_welcome = ant_agent_cli.print_welcome
+        print_help = ant_agent_cli.print_help
+        print_history_list = ant_agent_cli.print_history_list
+
+        from rich.console import Console
+        from rich.rule import Rule
+
+        # Test banner responsiveness
+        self.assertEqual(get_banner(120), BANNER)
+        self.assertEqual(get_banner(80), COMPACT_BANNER)
+        self.assertEqual(get_banner(50), COMPACT_BANNER)
+
+        # Test rule creation
+        rule = get_rule()
+        self.assertIsInstance(rule, Rule)
+
+        # Test rendering welcome and help on narrow and wide consoles
+        for width in [40, 80, 120]:
+            with open(os.devnull, "w") as devnull:
+                c = Console(width=width, file=devnull)
+                print_welcome(c, self.config, self.agent)
+                print_help(c)
+                print_history_list(c)
+
+    def test_episodic_memory_and_session_todo(self):
+        # 1. Test session todo isolation
+        agent1 = AntAgent(self.config, session_id="sess_101")
+        agent2 = AntAgent(self.config, session_id="sess_102")
+
+        todo_tool1 = tools.get_tool("plan_and_todo", agent1)
+        todo_tool2 = tools.get_tool("plan_and_todo", agent2)
+
+        res1 = todo_tool1.execute("add Task for Session 1")
+        self.assertIn("Added task", res1)
+
+        # Check agent2 todo list is empty
+        res2 = todo_tool2.execute("list")
+        self.assertEqual(res2, "Todo list is empty.")
+
+        # Check agent1 todo list has item
+        list1 = todo_tool1.execute("list")
+        self.assertIn("Task for Session 1", list1)
+
+        # 2. Test episodic memory isolation per session
+        store_tool1 = tools.get_tool("vector_memory_store", agent1)
+        recall_tool1 = tools.get_tool("vector_memory_recall", agent1)
+        recall_tool2 = tools.get_tool("vector_memory_recall", agent2)
+
+        # Store in session scope explicitly
+        store_tool1.execute(json.dumps({"text": "Session 1 secret notes", "scope": "session"}))
+
+        mem1 = recall_tool1.execute("secret notes")
+        self.assertIn("Session 1 secret notes", mem1)
+        self.assertIn("[Episodic]", mem1)
+
+        mem2 = recall_tool2.execute("secret notes")
+        self.assertEqual(mem2, "No relevant memories found.")
+
+    def test_memory_scope_selection_flow(self):
+        agent = AntAgent(self.config, session_id="sess_scope")
+        agent.config["interactive_memory_scope"] = True
+        store_tool = tools.get_tool("vector_memory_store", agent)
+
+        # Mock interactive selection callback returning 'global'
+        agent.memory_scope_callback = lambda text: "global"
+        res_g = store_tool.execute("Universal law of gravitation")
+        self.assertIn("stored in global memory", res_g)
+
+        # Mock callback returning 'workspace'
+        agent.memory_scope_callback = lambda text: "workspace"
+        res_w = store_tool.execute("Project specific config key")
+        self.assertIn("stored in workspace memory", res_w)
+
+        recall_tool = tools.get_tool("vector_memory_recall", agent)
+        results = recall_tool.execute("gravitation config")
+        self.assertIn("[Global]", results)
+        self.assertIn("[Workspace]", results)
+
 if __name__ == "__main__":
     unittest.main()
+
+
