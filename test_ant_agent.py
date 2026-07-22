@@ -929,5 +929,49 @@ and some trailing text."""
         finally:
             time.sleep = orig_sleep
 
+    def test_tool_authorization_config_and_check(self):
+        agent = AntAgent(self.config)
+        self.assertFalse(agent.is_authorization_required("filesystem_write"))
+
+        agent.config["authorization_required_tools"] = ["filesystem_write", "python_repl"]
+        self.assertTrue(agent.is_authorization_required("filesystem_write"))
+        self.assertTrue(agent.is_authorization_required("python_repl"))
+        self.assertFalse(agent.is_authorization_required("web_search"))
+
+        # Test alias authorization_required
+        agent.config.pop("authorization_required_tools")
+        agent.config["authorization_required"] = ["filesystem_delete"]
+        self.assertTrue(agent.is_authorization_required("filesystem_delete"))
+        self.assertFalse(agent.is_authorization_required("filesystem_write"))
+
+    def test_tool_authorization_approval_flow(self):
+        agent = AntAgent(self.config)
+        agent.config["authorization_required_tools"] = ["filesystem_write"]
+
+        approved_calls = []
+        def auth_cb(tname, tparam):
+            approved_calls.append((tname, tparam))
+            return True
+
+        res = agent._execute_tool_with_auth("filesystem_write", "test_auth.txt\n=== CONTENT ===\nhello auth", authorization_callback=auth_cb)
+        self.assertEqual(len(approved_calls), 1)
+        self.assertEqual(approved_calls[0][0], "filesystem_write")
+        self.assertIn("Successfully wrote", res)
+
+    def test_tool_authorization_denial_flow(self):
+        agent = AntAgent(self.config)
+        agent.config["authorization_required_tools"] = ["python_repl"]
+
+        denied_calls = []
+        def auth_cb(tname, tparam):
+            denied_calls.append((tname, tparam))
+            return False
+
+        res = agent._execute_tool_with_auth("python_repl", "import os; print(os.name)", authorization_callback=auth_cb)
+        self.assertEqual(len(denied_calls), 1)
+        self.assertEqual(denied_calls[0][0], "python_repl")
+        self.assertTrue(res.startswith("Tool execution denied by user"))
+        self.assertIn("python_repl", res)
+
 if __name__ == "__main__":
     unittest.main()

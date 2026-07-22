@@ -74,6 +74,13 @@
 
 ---
 
+## 🛡️ Agent Permission Flow
+
+Ant Agent implements an opt-in security model for sensitive tools. Before executing a restricted tool, the agent:
+1. **Checks Authorization**: Verifies if the tool is listed in `authorization_required_tools` within your `~/.ant_agent/config.json`.
+2. **Requests Approval**: If restricted, it displays a terminal prompt showing the tool name and parameters.
+3. **Executes**: Only proceeds if you explicitly approve via `y/n` input.
+
 ## ⚡ Usage
 
 ### Start Interactive Chat
@@ -142,14 +149,20 @@ python -m unittest test_ant_agent.py
 - [x] **Task Decomposition**: Automatic DAG-based task checklist generation and tracking.
 - [x] **Targeted Code Navigation**: AST/Regex repo mapping and selective line reading.
 - [x] **Hybrid Memory Routing**: Global memory vs Workspace memory split.
-- [x] **Context Optimization**: Automatic token-safe context compression and message truncation.
+- [x] **Context Optimization**: Automatic token-safe context auto-summarization at 80% limit instead of static truncation.
 - [x] **Zero-Config Search Fallback**: Seamless fallback to DuckDuckGo HTML search if Tavily API is missing.
 - [x] **XML + Native Tooling**: Support for native tool schemas as well as XML tags.
 - [x] **Improved stats on token consumption**: Support precise tracking by model name globally across sessions.
+- [x] **Knowledge Gaps Loop**: Autonomous loop resolving uncertainty placeholders (`__GAP::`) via dynamic search, doc scraping, code snippet extraction, and injection.
+- [x] **Read-Only Analysis Mode**: Dynamic routing for purely informational or architecture queries, excluding file-modifying tools.
+- [x] **Infinite Execution Loop**: Removed loop limits so tasks continue dynamically until completion.
+- [x] **Robust Credentials Fallback**: Fallback credentials verification via environment variables (`GEMINI_API_KEY` / `OPENAI_API_KEY`).
+- [x] **Exponential Backoff Retries**: Graceful handling of API rate limits (429) with automatic retries.
+- [x] **Premium TUI**: Branded ASCII banner, themed panels (HEAVY/ROUNDED/DOUBLE box styles), Unicode icons, styled status callbacks, masked API keys, and graceful exit screen — zero new dependencies.
+- [x] **Agent Permission Flow**: Opt-in security model for sensitive tools with explicit user approval before execution.
 
 ### Yet to Do
 - [ ] **Improved long-term memory**: Integrate semantic reranking and smarter context truncation for vector embeddings.
-- [ ] **Improved TUI**: Add interactive menus, scrollable panels, and enhanced theme configuration.
 - [ ] **Multimodal inputs**: Integrate vision capabilities to analyze screenshots and local image/PDF files.
 - [ ] **Pip package of Ant Agent**: Package and distribute Ant Agent on PyPI for easy installation.
 - [ ] **Agent Orchestration**: Support auto-deployment of sub-agents to distribute heavy workloads and finish tasks faster.
