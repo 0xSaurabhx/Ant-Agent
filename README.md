@@ -14,6 +14,7 @@
 ---
 
 **Ant Agent** is an advanced developer companion designed to run locally. Built on the philosophy that **small models (e.g., 1B to 30B parameters) shouldn't try to memorize the world—they should call the right tools**, Ant Agent acts as the ultimate local orchestrator. It bridges the reasoning gap by combining a small local model with persistent memory, computation engines, and filesystem controls.
+<p><img width="1273" height="753" alt="Screenshot from 2026-07-22 14-45-40" src="https://github.com/user-attachments/assets/5cf14aad-1b2b-4af3-a096-12f80005c7f8" /></p>
 
 ---
 
