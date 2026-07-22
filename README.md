@@ -29,7 +29,7 @@
   * Recognizes user continuation prompts (e.g., "continue", "next", "proceed") to smoothly advance through the plan without redundant planning overhead.
 * **🔍 Developer-First Code Navigation**:
   * **Repository Mapping (`generate_repo_map`)**: Dynamically parses the codebase using AST (Python) or regex (Go, JS, Rust, C) to extract class/function locations and line numbers.
-  * **Targeted Line Reading (`read_file_lines`)**: Limits file reads to specific line ranges (up to 50 lines at a time) to prevent context bloat and token waste.
+  * **Targeted Line Reading (`read_file_lines`)**: Reads specific line ranges of a file to prevent context bloat and token waste.
   * **Deep Grep Search (`grep_search`)**: Quickly searches text patterns in workspace files while ignoring build artifacts and virtual environments.
 * **🧠 Segregated Hybrid Memory System**:
   * Routes factual context intelligently between **Global Memory** (`~/.ant_agent/memory.json`) and **Workspace Memory** (`.ant_agent/memory.json`).
@@ -160,9 +160,9 @@ python -m unittest test_ant_agent.py
 - [x] **Exponential Backoff Retries**: Graceful handling of API rate limits (429) with automatic retries.
 - [x] **Premium TUI**: Branded ASCII banner, themed panels (HEAVY/ROUNDED/DOUBLE box styles), Unicode icons, styled status callbacks, masked API keys, and graceful exit screen — zero new dependencies.
 - [x] **Agent Permission Flow**: Opt-in security model for sensitive tools with explicit user approval before execution.
+- [x] **Improved long-term memory**: Integrate semantic reranking and smarter context truncation for vector embeddings.
 
 ### Yet to Do
-- [ ] **Improved long-term memory**: Integrate semantic reranking and smarter context truncation for vector embeddings.
 - [ ] **Multimodal inputs**: Integrate vision capabilities to analyze screenshots and local image/PDF files.
 - [ ] **Pip package of Ant Agent**: Package and distribute Ant Agent on PyPI for easy installation.
 - [ ] **Agent Orchestration**: Support auto-deployment of sub-agents to distribute heavy workloads and finish tasks faster.

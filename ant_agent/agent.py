@@ -13,7 +13,7 @@ from ant_agent.memory import SimpleVectorDB
 from ant_agent.config import load_config
 from ant_agent.tui_theme import (
     BOX_TOOL_CALL, BOX_TOOL_RESPONSE, BOX_PLAN,
-    ICON_BOLT, ICON_CHECK, ICON_CLIPBOARD, ICON_WARN,
+    ICON_BOLT, ICON_BRAIN, ICON_CHECK, ICON_CLIPBOARD, ICON_WARN,
     ACCENT_CYAN, ACCENT_GREEN, ACCENT_YELLOW, ACCENT_BLUE,
 )
 
@@ -190,17 +190,24 @@ class AntAgent:
             workspace_keywords = ["project", "code", "file", "folder", "directory", "workspace", "repo", "compile", "build", "git", "go", "python", "rust", "programming", "agent", "bug", "issue", "todo"]
             if any(kw in text.lower() for kw in workspace_keywords):
                 return "workspace"
+            global_keywords = ["user", "prefer", "like", "profile", "hobby", "name", "email", "phone", "birthday", "hometown", "favorite"]
+            if any(kw in text.lower() for kw in global_keywords):
+                return "global"
             return "session"
 
+        # Stop spinner if status_callback is active
+        status_cb = getattr(self, "current_status_callback", None)
+        if status_cb:
+            status_cb("print", f"[bold cyan]{ICON_BRAIN} Memory Scope Selection Required[/bold cyan]")
+
         preview = text if len(text) < 300 else text[:300] + "... (truncated)"
-        from ant_agent.tui_theme import BOX_TOOL_CALL, ACCENT_CYAN, ICON_BRAIN
 
         self.console.print(Panel(
             Text.from_markup(
                 f"[bold cyan]Fact / Memory:[/bold cyan]\n{preview}\n\n"
                 f"[bold yellow]Select Scope:[/bold yellow]\n"
-                f"  [1] Session / Episodic [dim](Temporary to this chat session)[/dim]\n"
-                f"  [2] Workspace [dim](Saved for this project)[/dim]\n"
+                f"  [1] Temp / Session [dim](Temporary to this chat session)[/dim]\n"
+                f"  [2] Workspace Wise [dim](Saved for this project)[/dim]\n"
                 f"  [3] Global [dim](Saved across all projects)[/dim]",
                 overflow="fold"
             ),
@@ -211,7 +218,7 @@ class AntAgent:
         ))
 
         try:
-            choice = input("Select storage target [1=Session, 2=Workspace, 3=Global] (default 1): ").strip().lower()
+            choice = input("Select storage target [1=Temp/Session, 2=Workspace Wise, 3=Global] (default 1): ").strip().lower()
             return valid_scopes.get(choice, "session")
         except (KeyboardInterrupt, EOFError, Exception):
             return "session"
@@ -710,7 +717,7 @@ Your task is to analyze the user's prompt and route it to either "direct", "anal
 ROUTING CRITERIA:
 1. "direct":
    - Use this for simple, deterministic, single-step commands.
-   - Examples: restarting a PM2 instance, running a test/linting script, checking git status, reading/displaying a specific line range, searching for a single fact on the web, simple mathematical calculations, simple conversational greetings or queries.
+   - Examples: restarting a PM2 instance, running a test/linting script, checking git status, reading/displaying a specific line range (e.g. "show me lines 10-20 of main.py" where the file and range are explicitly given), searching for a single fact on the web, simple mathematical calculations, simple conversational greetings or queries.
    - If a tool is required for direct execution, specify the tool name and the exact parameter to pass to it.
    - Eligible tools:
      * code_runner_with_tests (e.g. for running command line scripts, restarting pm2, running tests, linting)
@@ -720,14 +727,14 @@ ROUTING CRITERIA:
      * filesystem_write (for writing a whole file)
      * filesystem_edit (for editing a file)
      * filesystem_delete (for deleting a file)
-     * grep_search (for searching a pattern in files)
+     * grep_search (for searching a pattern in files. Parameter MUST be the raw text pattern only—do not pass file names or flags)
      * web_search (for searching the web)
      * web_fetch_and_extract (for fetching a URL)
      * vector_memory_store (for saving user info)
      * vector_memory_recall (for recalling user info)
 
 2. "analysis":
-   - Use this for purely informational requests, walkthroughs, codebase explanations, code review queries, questions about architecture or logic flow, and documentation reading.
+   - Use this for purely informational requests, walkthroughs, codebase explanations, code review queries, questions about architecture or logic flow, and general documentation reading (e.g., finding, extracting, or summarizing checklists, roadmaps, or feature lists from files where the line numbers are not specified).
    - These requests DO NOT require any code modifications, creating new files, or editing existing files in the workspace. They are read-only inquiries.
 
 3. "planner":
@@ -769,9 +776,10 @@ Do not include any markdown formatting (like ```json or ```) in your output. Ret
             }
 
     def run_cycle(self, user_input: str, verbose: bool = True, status_callback=None, authorization_callback=None):
+        self.current_status_callback = status_callback
         # Check if it is a continuation command
         is_continuation = False
-        todo_path = Path.cwd() / ".ant_agent" / "todo.json"
+        todo_path = self.get_session_todo_path()
         if todo_path.exists():
             try:
                 with open(todo_path, "r") as f:

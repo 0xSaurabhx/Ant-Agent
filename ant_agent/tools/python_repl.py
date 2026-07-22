@@ -6,7 +6,11 @@ from ant_agent.tools import BaseTool, register_tool
 @register_tool
 class PythonReplTool(BaseTool):
     name = "python_repl"
-    description = "Run python code to calculate or test logic. Parameter: Python code content."
+    description = (
+        "Run Python code to calculate or test logic. Parameter: Python code content. "
+        "Note: Do not use this tool for file searching or traversing directories. "
+        "Any file access in the script must be strictly restricted to the current working directory."
+    )
 
     def execute(self, parameter: str) -> str:
         code = parameter.strip()

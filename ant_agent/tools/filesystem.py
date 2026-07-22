@@ -143,9 +143,71 @@ class GrepSearchTool(BaseTool):
 
     def execute(self, parameter: str) -> str:
         try:
-            pattern = parameter.strip().lower()
+            import shlex
+            param_str = parameter.strip()
+            
+            # Default values
+            file_filter = None
+            pattern = param_str
+            
+            try:
+                args = shlex.split(param_str)
+            except Exception:
+                args = param_str.split()
+                
+            if len(args) > 1:
+                # Check if -e flag is present
+                if "-e" in args:
+                    idx = args.index("-e")
+                    if idx + 1 < len(args):
+                        pattern = args[idx + 1]
+                    # The other arguments (excluding -e and pattern) could specify file/directory
+                    other_args = [a for i, a in enumerate(args) if i not in (idx, idx + 1)]
+                    if other_args:
+                        file_filter = other_args[0]
+                else:
+                    # Let's check if the first argument looks like a filename/path/glob or exists
+                    first_arg = args[0]
+                    workspace = get_workspace()
+                    is_file_like = (
+                        "." in first_arg or 
+                        "/" in first_arg or 
+                        (workspace / first_arg).exists()
+                    )
+                    if is_file_like:
+                        file_filter = first_arg
+                        # Rejoin the remaining arguments as the pattern
+                        pattern = " ".join(args[1:])
+                    else:
+                        # Otherwise check if the last argument is a file/path
+                        last_arg = args[-1]
+                        is_last_file_like = (
+                            "." in last_arg or 
+                            "/" in last_arg or 
+                            (workspace / last_arg).exists()
+                        )
+                        if is_last_file_like:
+                            file_filter = last_arg
+                            pattern = " ".join(args[:-1])
+                        else:
+                            # Default standard pattern
+                            pattern = param_str
+
+            # Strip quotes if any remaining
+            pattern = pattern.strip("'\"")
+            if not pattern:
+                pattern = param_str
+
+            # Unescape characters that are commonly escaped by LLMs/triage routers
+            # since grep_search does a literal search.
+            escaped_chars = ['[', ']', '(', ')', '.', '*', '+', '?', ' ', '_', '\\']
+            for c in escaped_chars:
+                pattern = pattern.replace('\\' + c, c)
+                
+            pattern_lower = pattern.lower()
             workspace = get_workspace()
             matches = []
+            
             # Walk directory
             for root, dirs, files in os.walk(workspace):
                 # Skip venv/hidden dirs
@@ -153,10 +215,17 @@ class GrepSearchTool(BaseTool):
                 for file in files:
                     file_path = Path(root) / file
                     try:
+                        rel = file_path.relative_to(workspace)
+                        
+                        # Apply file filter if specified
+                        if file_filter:
+                            filter_clean = file_filter.strip("'\"").lower()
+                            if filter_clean not in str(rel).lower():
+                                continue
+                                
                         with open(file_path, "r", errors="ignore", encoding="utf-8") as f:
                             for i, line in enumerate(f, 1):
-                                if pattern in line.lower():
-                                    rel = file_path.relative_to(workspace)
+                                if pattern_lower in line.lower():
                                     matches.append(f"{rel}:{i}: {line.strip()}")
                                     if len(matches) >= 50: # Limit results
                                         return "\n".join(matches) + "\n(Truncated to 50 results)"
@@ -418,9 +487,6 @@ class ReadFileLinesTool(BaseTool):
                 return "Error: line numbers must be positive integers starting from 1."
             if start_line > end_line:
                 return "Error: start_line must be less than or equal to end_line."
-            
-            if end_line - start_line + 1 > 50:
-                return "Error: You can read at most 50 lines at a time to prevent context bloat. Please specify a range of 50 lines or less."
             
             path = safe_path(rel_path)
             if not path.is_file():
