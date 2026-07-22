@@ -15,7 +15,7 @@ class ExtendedThinkTool(BaseTool):
 @register_tool
 class PlanAndTodoTool(BaseTool):
     name = "plan_and_todo"
-    description = "Manage tasks: 'list', 'add <task>', 'complete <index>', 'clear'."
+    description = "Manage tasks: 'list', 'add <task>', 'complete <index1, index2, ...> or complete all', 'clear'."
 
     def _get_todo_path(self) -> Path:
         if self.context and hasattr(self.context, "get_session_todo_path"):
@@ -41,15 +41,38 @@ class PlanAndTodoTool(BaseTool):
             self._save(tasks)
             return f"Added task: {task_desc}"
         elif cmd.startswith("complete "):
-            try:
-                idx = int(cmd[9:].strip())
-                if 0 <= idx < len(tasks):
-                    tasks[idx]["done"] = True
-                    self._save(tasks)
-                    return f"Completed task: {tasks[idx]['desc']}"
-                return "Index out of range."
-            except ValueError:
-                return "Invalid index. Use: complete <number>"
+            idx_str = cmd[9:].strip()
+            if idx_str.lower() == "all":
+                for t in tasks:
+                    t["done"] = True
+                self._save(tasks)
+                return "Completed all tasks."
+            
+            # Split indices by comma and/or space
+            import re
+            parts = re.split(r'[,\s]+', idx_str)
+            completed_descs = []
+            invalid_parts = []
+            for part in parts:
+                if not part:
+                    continue
+                try:
+                    idx = int(part)
+                    if 0 <= idx < len(tasks):
+                        tasks[idx]["done"] = True
+                        completed_descs.append(f"{idx} ({tasks[idx]['desc']})")
+                    else:
+                        invalid_parts.append(f"{part} (out of range)")
+                except ValueError:
+                    invalid_parts.append(part)
+                    
+            if completed_descs:
+                self._save(tasks)
+                msg = f"Completed tasks: {', '.join(completed_descs)}"
+                if invalid_parts:
+                    msg += f" (Invalid: {', '.join(invalid_parts)})"
+                return msg
+            return f"Invalid index list: '{idx_str}'. Use: complete <index1, index2, ...> or complete all"
         elif cmd == "clear":
             self._save([])
             return "Cleared all tasks."
@@ -62,7 +85,7 @@ class PlanAndTodoTool(BaseTool):
                 res.append(f"{i}: {status} {t['desc']}")
             return "\n".join(res)
         else:
-            return "Unknown command. Use: list, add <task>, complete <index>, clear"
+            return "Unknown command. Use: list, add <task>, complete <index1, index2, ...> or complete all, clear"
 
     def _save(self, tasks):
         todo_path = self._get_todo_path()

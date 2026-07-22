@@ -132,6 +132,27 @@ and some trailing text."""
         self.assertIn("0:", res)
         res = tool.execute("complete 0")
         self.assertIn("Completed task", res)
+        
+        # Test multiple task completion
+        tool.execute("clear")
+        tool.execute("add Buy milk")
+        tool.execute("add Clean room")
+        tool.execute("add Do homework")
+        res = tool.execute("complete 0, 2")
+        self.assertIn("Completed tasks", res)
+        self.assertIn("0", res)
+        self.assertIn("2", res)
+        
+        res = tool.execute("list")
+        self.assertIn("[x] Buy milk", res)
+        self.assertIn("[ ] Clean room", res)
+        self.assertIn("[x] Do homework", res)
+        
+        # Test complete all
+        res = tool.execute("complete all")
+        self.assertIn("Completed all tasks", res)
+        res = tool.execute("list")
+        self.assertIn("[x] Clean room", res)
 
         # test memory tools
         self.agent.global_db.data = []
@@ -336,15 +357,36 @@ and some trailing text."""
             res = tool.execute("test_lines.txt:10-20")
             self.assertTrue(res.startswith("Error:"))
             
-            # Test range exceeding 50 lines
+            # Test range exceeding 50 lines (should now succeed)
             long_file = Path("test_long.txt")
             long_file.write_text("\n".join(f"line {i}" for i in range(1, 100)) + "\n")
             try:
                 res_exceed = tool.execute("test_long.txt:1-60")
-                self.assertTrue("Error: You can read at most 50 lines" in res_exceed)
+                self.assertFalse(res_exceed.startswith("Error:"))
+                self.assertTrue("60: line 60" in res_exceed)
             finally:
                 if long_file.exists():
                     long_file.unlink()
+        finally:
+            if test_file.exists():
+                test_file.unlink()
+
+    def test_grep_search(self):
+        test_file = Path("test_search.txt")
+        test_file.write_text("Hello World\n- [ ] Pending Checklist Item\nKeep learning.\n")
+        
+        try:
+            tool = tools.get_tool("grep_search")
+            
+            # Test unescaping of brackets and backslashes
+            res = tool.execute("test_search.txt -e \"[ \\]\"")
+            self.assertTrue("Pending Checklist Item" in res)
+            self.assertTrue("test_search.txt:2:" in res)
+            
+            # Test simple pattern match
+            res = tool.execute("learning")
+            self.assertTrue("Keep learning." in res)
+            self.assertTrue("test_search.txt:3:" in res)
         finally:
             if test_file.exists():
                 test_file.unlink()
@@ -421,25 +463,25 @@ and some trailing text."""
             except Exception:
                 pass
                 
-            todo_path = Path(".ant_agent/todo.json")
-            if todo_path.exists():
-                with open(todo_path, "r") as f:
-                    todos = json.load(f)
-                todo_texts = [t["desc"] for t in todos]
-                self.assertTrue("Step One" in todo_texts)
-                self.assertTrue("Step Two" in todo_texts)
-                self.assertFalse("Meta-thought 1" in todo_texts)
-                self.assertFalse("Meta-thought 2" in todo_texts)
+            todo_path = agent.get_session_todo_path()
+            self.assertTrue(todo_path.exists())
+            with open(todo_path, "r") as f:
+                todos = json.load(f)
+            todo_texts = [t["desc"] for t in todos]
+            self.assertTrue("Step One" in todo_texts)
+            self.assertTrue("Step Two" in todo_texts)
+            self.assertFalse("Meta-thought 1" in todo_texts)
+            self.assertFalse("Meta-thought 2" in todo_texts)
         finally:
             tools.get_tool = original_get_tool
-            todo_path = Path(".ant_agent/todo.json")
+            todo_path = agent.get_session_todo_path()
             if todo_path.exists():
                 todo_path.unlink()
 
     def test_continuation_skips_decomposition(self):
         agent = AntAgent(self.config)
         
-        todo_path = Path(".ant_agent/todo.json")
+        todo_path = agent.get_session_todo_path()
         todo_path.parent.mkdir(parents=True, exist_ok=True)
         with open(todo_path, "w") as f:
             json.dump([
